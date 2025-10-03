@@ -18,3 +18,7 @@ data/
 # Editor directories and files
 .vscode/
 .idea/
+
+# Local secrets and run script (do not commit your API keys)
+config/secrets.json
+scripts/run.sh
