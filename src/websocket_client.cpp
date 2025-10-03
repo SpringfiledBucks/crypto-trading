@@ -12,7 +12,7 @@
 
 #include <thread>
 #include <mutex>
-#include <iostream>
+#include "logger.h"
 #include <regex>
 
 namespace beast = boost::beast;
@@ -51,8 +51,8 @@ WebSocketClient::~WebSocketClient() { close(); }
 
 bool WebSocketClient::connect(const std::string &url) {
     std::string host, port, target;
-    if(!parse_ws_url(url, host, port, target)) {
-        std::cerr << "Invalid wss URL: " << url << "\n";
+        if(!parse_ws_url(url, host, port, target)) {
+        Logger::error(std::string("Invalid wss URL: ") + url);
         return false;
     }
 
@@ -92,7 +92,7 @@ bool WebSocketClient::connect(const std::string &url) {
             http::read_header(sock, buffer, rp);
             auto res = rp.get();
             if(res.result() != http::status::ok) {
-                std::cerr << "Proxy CONNECT failed: " << res.result_int() << "\n";
+                Logger::error(std::string("Proxy CONNECT failed: ") + std::to_string(res.result_int()));
                 return false;
             }
         } else {
@@ -114,7 +114,7 @@ bool WebSocketClient::connect(const std::string &url) {
         // Set SNI Hostname
         if(!SSL_set_tlsext_host_name(impl->ws->next_layer().native_handle(), host.c_str())) {
             beast::error_code ec{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
-            std::cerr << "SNI set failed: " << ec.message() << "\n";
+            Logger::warn(std::string("SNI set failed: ") + ec.message());
         }
 
         // perform websocket handshake
@@ -132,15 +132,15 @@ bool WebSocketClient::connect(const std::string &url) {
                     if(impl->on_msg) impl->on_msg(msg);
                 }
             } catch(const std::exception &ex) {
-                // treat as disconnected
-                impl->connected = false;
-                std::cerr << "WS reader exception: " << ex.what() << "\n";
+                    // treat as disconnected
+                    impl->connected = false;
+                    Logger::error(std::string("WS reader exception: ") + ex.what());
             }
         });
 
         return true;
     } catch(const std::exception &ex) {
-        std::cerr << "WS connect exception: " << ex.what() << "\n";
+        Logger::error(std::string("WS connect exception: ") + ex.what());
         return false;
     }
 }
@@ -167,7 +167,7 @@ bool WebSocketClient::send(const std::string &msg) {
     beast::error_code ec;
     impl->ws->write(net::buffer(msg), ec);
     if(ec) {
-        std::cerr << "WS send error: " << ec.message() << "\n";
+        Logger::error(std::string("WS send error: ") + ec.message());
         return false;
     }
     return true;

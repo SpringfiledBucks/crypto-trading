@@ -9,8 +9,18 @@
 #include <fstream>
 #include "order_manager.h"
 #include <cstdlib>
+#include "logger.h"
+#include <csignal>
+#include <atomic>
+#include <unistd.h>
 
 using json = nlohmann::json;
+
+static std::atomic<bool> g_running{true};
+
+void handle_sig(int) {
+    g_running = false;
+}
 
 int main(int argc, char **argv) {
     ConsoleUI ui;
@@ -43,7 +53,16 @@ int main(int argc, char **argv) {
             std::cerr << "Failed to parse config\n";
         }
     }
-    ui.start();
+    // 如果设置了 NO_UI 环境变量，跳过控制台 UI（用于 systemd/headless 运行）
+    const char *no_ui_env = std::getenv("NO_UI");
+    bool no_ui = false;
+    if(no_ui_env && std::string(no_ui_env) != "0") {
+        no_ui = true;
+    }
+    // 只有在非 headless 情况下初始化 ncurses UI
+    if(!no_ui) {
+        ui.start();
+    }
     trader.start();
 
     // Load symbols from config/symbols.json
@@ -80,12 +99,34 @@ int main(int argc, char **argv) {
         }
     }
 
-    if(api_key && api_secret) {
-        om.set_mode("live", api_key, api_secret);
-        ui.set_connection_status("OrderManager: live");
+    // Allow explicit override via TRADING_MODE env var: "paper" or "live"
+    const char *trading_mode_env = std::getenv("TRADING_MODE");
+    if(trading_mode_env) {
+        std::string tm(trading_mode_env);
+        if(tm == "live") {
+            // live requested; only enable if keys are present
+            if(api_key && api_secret) {
+                om.set_mode("live", api_key, api_secret);
+                ui.set_connection_status("OrderManager: live (forced)");
+            } else {
+                // can't run live without keys, fall back to paper
+                om.set_mode("paper");
+                ui.set_connection_status("OrderManager: paper (fallback, missing keys)");
+            }
+        } else {
+            // any other value => paper
+            om.set_mode("paper");
+            ui.set_connection_status("OrderManager: paper (forced)");
+        }
     } else {
-        om.set_mode("paper");
-        ui.set_connection_status("OrderManager: paper");
+        // default behavior: detect by presence of API keys
+        if(api_key && api_secret) {
+            om.set_mode("live", api_key, api_secret);
+            ui.set_connection_status("OrderManager: live");
+        } else {
+            om.set_mode("paper");
+            ui.set_connection_status("OrderManager: paper");
+        }
     }
 
     // Example: use WebSocket client to subscribe to mark price stream (placeholder)
@@ -93,12 +134,48 @@ int main(int argc, char **argv) {
     ws.set_on_message([&](const std::string &m){
         ui.set_status("WS msg: " + m);
     });
-    ws.connect("wss://fstream.binance.com/ws/btcusdt@markPrice");
+    // initialize optional file logging when running interactively
+    if(isatty(STDOUT_FILENO)) {
+        // interactive session: also append to logs/runtime.log
+        Logger::init_file("logs/runtime.log");
+    }
 
-    // Keep running until UI quits
-    while(true) {
+    // Connect with exponential backoff retry
+    const std::string ws_url = "wss://fstream.binance.com/ws/btcusdt@markPrice";
+    int attempt = 0;
+    const int max_attempts = 10;
+    int backoff_ms = 500; // initial
+    while(g_running) {
+        if(ws.connect(ws_url)) {
+            Logger::info(std::string("WS connected: ") + ws_url);
+            break;
+        }
+        attempt++;
+        if(attempt >= max_attempts) {
+            Logger::error("Max WS connect attempts reached, will keep trying periodically");
+            // after max attempts, sleep longer and continue retrying
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            continue;
+        }
+        Logger::warn(std::string("WS connect failed, retrying in ") + std::to_string(backoff_ms) + "ms");
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+        backoff_ms = std::min(backoff_ms * 2, 60000);
+    }
+
+    // Install signal handlers for graceful shutdown
+    std::signal(SIGTERM, handle_sig);
+    std::signal(SIGINT, handle_sig);
+
+    // Keep running until signalled
+    Logger::info("Entering main loop");
+    while(g_running) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+
+    Logger::info("Shutdown requested, closing WebSocket and exiting");
+    try {
+        ws.close();
+    } catch(...) {}
 
     return 0;
 }

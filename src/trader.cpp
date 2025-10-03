@@ -2,7 +2,7 @@
 // trader: 简单的交易策略循环骨架，接收 MarketData 并触发策略
 #include <thread>
 #include <chrono>
-#include <iostream>
+#include "logger.h"
 
 Trader::Trader() {}
 Trader::~Trader() { stop(); }
@@ -20,6 +20,6 @@ void Trader::start() {
 void Trader::stop() { running = false; }
 
 void Trader::on_market_data(const MarketData &md) {
-    std::cout << "MarketData: " << md.symbol << " " << md.price << "\n";
+    Logger::info(std::string("MarketData: ") + md.symbol + " " + std::to_string(md.price));
     // Placeholder: simple strategy logic
 }

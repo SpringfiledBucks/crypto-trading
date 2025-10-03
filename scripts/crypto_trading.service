@@ -1,0 +1,19 @@
+[Unit]
+Description=Crypto Trading Service
+After=network.target
+
+[Service]
+Type=simple
+User=crypto
+WorkingDirectory=/home/crypto/crypto-trading
+# Force paper mode for safety
+Environment=TRADING_MODE=paper
+Environment=NO_UI=1
+# ExecStart should be the full path to the built binary
+ExecStart=/home/crypto/crypto-trading/build/crypto_trading
+Restart=on-failure
+RestartSec=5
+[# When running under systemd we prefer journal logging (stderr) so remove file redirection.
+# For interactive runs, scripts/run.sh still writes to logs/runtime.log.]
+[Install]
+WantedBy=multi-user.target

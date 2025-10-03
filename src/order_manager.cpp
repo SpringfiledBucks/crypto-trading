@@ -1,7 +1,7 @@
 #include "order_manager.h"
 // order_manager: 负责管理下单请求（paper/live），调用 BinanceAPI 执行签名请求并处理重试
 #include "binance_api.h"
-#include <iostream>
+#include "logger.h"
 #include <thread>
 #include <chrono>
 
@@ -17,7 +17,7 @@ void OrderManager::set_mode(const std::string &mode, const std::string &api_key,
         // Attempt to sync time
         auto st = binance_.get_server_time();
         if(st) {
-            std::cout << "[OrderManager] Binance server time: " << *st << "\n";
+            Logger::info(std::string("[OrderManager] Binance server time: ") + std::to_string(*st));
         }
     }
 }
@@ -25,7 +25,7 @@ void OrderManager::set_mode(const std::string &mode, const std::string &api_key,
 std::optional<OrderManager::Order> OrderManager::place_order(const std::string &symbol, const std::string &side, double qty, double price) {
     Order o; o.symbol = symbol; o.price = price; o.quantity = qty; o.side = side; o.status = "NEW";
     if(mode_ == "paper") {
-        std::cout << "[OrderManager] paper order: " << symbol << " " << side << " " << qty << "@" << price << "\n";
+    Logger::info(std::string("[OrderManager] paper order: ") + symbol + " " + side + " " + std::to_string(qty) + "@" + std::to_string(price));
         return o;
     }
 
@@ -42,7 +42,7 @@ std::optional<OrderManager::Order> OrderManager::place_order(const std::string &
         }
         if(resp->http_code >= 200 && resp->http_code < 300) {
             o.status = "PLACED";
-            std::cout << "[OrderManager] order placed: " << resp->body << "\n";
+            Logger::info(std::string("[OrderManager] order placed: ") + resp->body);
             return o;
         } else {
             std::cerr << "[OrderManager] order failed: " << resp->http_code << " " << resp->body << "\n";
