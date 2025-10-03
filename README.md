@@ -31,6 +31,8 @@ make -j
 ./crypto_trading
 ```
 
+更多部署与 systemd 配置说明，请参阅 `docs/DEPLOY.md`。
+
 配置文件说明（项目使用的配置文件）：
 
 - `config/config.json`：主配置，包含交易所 API 基础 URL、交易选项（是否开启）、UI 刷新设置、以及代理设置等非敏感配置。

@@ -15,10 +15,18 @@
   },
   "ui": {
     "refresh_ms": 500
-  }
-  ,"proxy": {
+  },
+  "proxy": {
     "http": "socks5h://127.0.0.1:15651",
     "https": "socks5h://127.0.0.1:15651",
     "ws": "http://127.0.0.1:15615"
+  },
+  "ws": {
+    "reconnect": {
+      "initial_backoff_ms": 500,
+      "max_backoff_ms": 60000,
+      "max_attempts": 10,
+      "period_after_max_seconds": 30
+    }
   }
 }

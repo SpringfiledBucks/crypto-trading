@@ -1,3 +1,6 @@
+#!/bin/bash
+# archived legacy latency test
+echo "This script is archived. See archive/scripts/README.md"
 #!/usr/bin/env bash
 # Archived: binance_latency_test.sh
 # 原始路径: scripts/binance_latency_test.sh

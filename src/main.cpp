@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
     std::string cfgpath = "config/config.json";
     std::ifstream f(cfgpath);
     if(!f) {
-        std::cerr << "Config file not found: " << cfgpath << "\n";
+        Logger::warn(std::string("Config file not found: ") + cfgpath);
     } else {
         try {
             json cfg; f >> cfg;
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
                 else if(p.contains("https") && p["https"].is_string()) proxy_url = p["https"].get<std::string>();
             }
         } catch(...) {
-            std::cerr << "Failed to parse config\n";
+            Logger::error("Failed to parse config");
         }
     }
     // 如果设置了 NO_UI 环境变量，跳过控制台 UI（用于 systemd/headless 运行）
@@ -140,11 +140,30 @@ int main(int argc, char **argv) {
         Logger::init_file("logs/runtime.log");
     }
 
-    // Connect with exponential backoff retry
+    // Connect with exponential backoff retry; parameters can be overridden in config/config.json
     const std::string ws_url = "wss://fstream.binance.com/ws/btcusdt@markPrice";
     int attempt = 0;
-    const int max_attempts = 10;
-    int backoff_ms = 500; // initial
+    int backoff_ms = 500; // default initial
+    int max_attempts = 10;
+    int max_backoff_ms = 60000;
+    int period_after_max_seconds = 30;
+    // try read from config
+    try {
+        std::ifstream cfgin("config/config.json");
+        if(cfgin) {
+            json cfg; cfgin >> cfg;
+            if(cfg.contains("ws") && cfg["ws"].contains("reconnect")) {
+                auto &r = cfg["ws"]["reconnect"];
+                if(r.contains("initial_backoff_ms")) backoff_ms = r["initial_backoff_ms"].get<int>();
+                if(r.contains("max_backoff_ms")) max_backoff_ms = r["max_backoff_ms"].get<int>();
+                if(r.contains("max_attempts")) max_attempts = r["max_attempts"].get<int>();
+                if(r.contains("period_after_max_seconds")) period_after_max_seconds = r["period_after_max_seconds"].get<int>();
+            }
+        }
+    } catch(...) {
+        Logger::warn("Failed to read WS reconnect params from config, using defaults");
+    }
+
     while(g_running) {
         if(ws.connect(ws_url)) {
             Logger::info(std::string("WS connected: ") + ws_url);
@@ -153,13 +172,12 @@ int main(int argc, char **argv) {
         attempt++;
         if(attempt >= max_attempts) {
             Logger::error("Max WS connect attempts reached, will keep trying periodically");
-            // after max attempts, sleep longer and continue retrying
-            std::this_thread::sleep_for(std::chrono::seconds(30));
+            std::this_thread::sleep_for(std::chrono::seconds(period_after_max_seconds));
             continue;
         }
         Logger::warn(std::string("WS connect failed, retrying in ") + std::to_string(backoff_ms) + "ms");
         std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
-        backoff_ms = std::min(backoff_ms * 2, 60000);
+        backoff_ms = std::min(backoff_ms * 2, max_backoff_ms);
     }
 
     // Install signal handlers for graceful shutdown

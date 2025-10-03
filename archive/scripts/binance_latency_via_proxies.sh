@@ -1,3 +1,5 @@
+#!/bin/bash
+echo "Archived: latency via proxies"
 #!/usr/bin/env bash
 # Archived: binance_latency_via_proxies.sh
 # Original: scripts/binance_latency_via_proxies.sh

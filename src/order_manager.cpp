@@ -35,7 +35,7 @@ std::optional<OrderManager::Order> OrderManager::place_order(const std::string &
     while(attempts < 3) {
         auto resp = binance_.send_signed_request("POST", "/fapi/v1/order", params);
         if(!resp) {
-            std::cerr << "[OrderManager] order attempt failed (no response), retrying...\n";
+            Logger::warn("[OrderManager] order attempt failed (no response), retrying...");
             attempts++;
             std::this_thread::sleep_for(std::chrono::seconds(1));
             continue;
@@ -45,7 +45,7 @@ std::optional<OrderManager::Order> OrderManager::place_order(const std::string &
             Logger::info(std::string("[OrderManager] order placed: ") + resp->body);
             return o;
         } else {
-            std::cerr << "[OrderManager] order failed: " << resp->http_code << " " << resp->body << "\n";
+            Logger::error(std::string("[OrderManager] order failed: ") + std::to_string(resp->http_code) + " " + resp->body);
             attempts++;
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
