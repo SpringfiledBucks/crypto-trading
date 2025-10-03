@@ -37,3 +37,7 @@ endif()
 
 # Install target
 install(TARGETS crypto_trading DESTINATION bin)
+
+add_executable(backtest tools/backtest.cpp)
+target_link_libraries(backtest PRIVATE strategies_lib)
+target_include_directories(backtest PRIVATE strategies include)
