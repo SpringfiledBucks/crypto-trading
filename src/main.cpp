@@ -135,8 +135,11 @@ int main(int argc, char **argv) {
         ui.set_status("WS msg: " + m);
     });
     // initialize optional file logging when running interactively
-    if(isatty(STDOUT_FILENO)) {
-        // interactive session: also append to logs/runtime.log
+    // initialize optional file logging when running interactively or when LOG_TO_FILE=1
+    const char *log_to_file_env = std::getenv("LOG_TO_FILE");
+    if(isatty(STDOUT_FILENO) || (log_to_file_env && std::string(log_to_file_env) == "1")) {
+        // ensure logs directory exists (best-effort)
+        system("mkdir -p logs >/dev/null 2>&1");
         Logger::init_file("logs/runtime.log");
     }
 

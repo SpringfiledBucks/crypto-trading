@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Crypto Trading Console</title>
+    <style>
+      body { font-family: monospace; background:#111; color:#ddd; }
+      #log { white-space: pre-wrap; max-height: 90vh; overflow: auto; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <h3>Crypto Trading Console</h3>
+    <div id="log">Connecting...</div>
+    <script>
+      const evt = new EventSource('/events');
+      const log = document.getElementById('log');
+      evt.onmessage = function(e) {
+        log.textContent += '\n' + e.data;
+        log.scrollTop = log.scrollHeight;
+      }
+      evt.onerror = function() {
+        log.textContent += '\n[connection lost]';
+      }
+    </script>
+  </body>
+</html>
