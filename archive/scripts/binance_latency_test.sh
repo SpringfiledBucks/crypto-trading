@@ -1,3 +1,8 @@
+#!/usr/bin/env bash
+# archived: binance_latency_test.sh
+cat <<'EOF'
+This script was archived. Original location: scripts/legacy_tests/binance_latency_test.sh
+EOF
 #!/bin/bash
 # archived legacy latency test
 echo "This script is archived. See archive/scripts/README.md"
