@@ -39,6 +39,10 @@ make -j
 - `config/CONFIG_TEMPLATE.md`：配置模板与字段说明（参考并复制到 `config/config.json` / `config/secrets.json`）。
 - `scripts/run_template.sh`：启动脚本模板（不要将带有密钥的 `scripts/run.sh` 提交到仓库）。
 
+归档与运行脚本说明：
+- 非核心或 legacy 的脚本已移到 `archive/scripts/`，以保持主分支整洁（你仍可在归档中找到历史脚本）。
+- 本地运行脚本 `scripts/run.sh` 可能包含敏感 API Key/Secret，已加入 `.gitignore`，不会被推送到远程。请确保在本地对该文件设置权限（600 或 700）。
+
 注意：当前仓库为演示骨架，交易功能为占位实现。将真实交易按需实现并谨慎测试。需要我为你：
 - 接入 Binance REST 签名并实现下单/撤单 API。
 - 添加 WebSocket 客户端以获取实时 K 线与深度。

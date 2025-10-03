@@ -34,4 +34,14 @@
 - 推荐在本地使用 `scripts/run.sh`（该文件在 `.gitignore` 中），在脚本内 `export` 环境变量并把密钥设为文件权限 600/700。示例脚本已经位于 `scripts/run.sh`。
 - 也可以把密钥放入 `config/secrets.json`（权限 600），但请勿提交到仓库。
 
+六、已归档脚本
+- 为了保持仓库整洁，若干非核心或 legacy 的脚本已移动到 `archive/scripts/`：
+	- `archive/scripts/binance_latency_test.sh`
+	- `archive/scripts/binance_latency_via_proxies.sh`
+	- `archive/scripts/ws_proxy_test.py`
+	- `archive/scripts/futures_ws_dashboard.py`
+	- `archive/scripts/twm_test.py`
+
+ 这些脚本为性能测试 / 离线调试用例，保留为归档以便未来参考或恢复。
+
 生成时间：2025-10-03
