@@ -22,3 +22,6 @@ data/
 # Local secrets and run script (do not commit your API keys)
 config/secrets.json
 scripts/run.sh
+build/
+logs/
+*.csv

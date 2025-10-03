@@ -1,0 +1,24 @@
+{
+  "binance": {
+    "perpetual": {
+      "base_url": "https://fapi.binance.com"
+    },
+    "options": {
+      "base_url": "https://dapi.binance.com"
+    }
+  },
+  "trading": {
+    "enabled": false,
+    "api_key": "",
+    "secret": "",
+    "risk_per_trade": 0.01
+  },
+  "ui": {
+    "refresh_ms": 500
+  }
+  ,"proxy": {
+    "http": "socks5h://127.0.0.1:15651",
+    "https": "socks5h://127.0.0.1:15651",
+    "ws": "http://127.0.0.1:15615"
+  }
+}

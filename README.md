@@ -1,15 +1,47 @@
-# crypto-trading
+# crypto-trading (C++ implementation)
 
-此仓库已由自动化脚本重新初始化（2025-10-03）。
+这是一个 C++ 项目骨架，用来访问币安永续合约和期权市场数据并实现自动开平单的基础架构。包含一个基于 ncurses 的控制台监控页面。
 
-说明：
-- 仓库已被清空并重新初始化为新的 git 仓库。
-- 此 README 为初始文件。请根据需要添加源代码、数据与文档。
+构建依赖：
+- CMake >= 3.10
+- Compiler 支持 C++17
+- libcurl
+- ncurses
+- nlohmann/json (single-header)
 
-建议操作：
-1. 若需要从远程恢复代码，请将远程仓库添加为 origin：
-   git remote add origin <REMOTE_URL>
-2. 然后可以将本地初始提交推送到远程：
-   git push -u origin main
+快速开始：
+1. 安装依赖（Ubuntu 示例）：
 
-请告诉我你接下来想要我执行的操作（例如：添加基本项目结构、创建 Python 虚拟环境、推送远程等）。
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake libcurl4-openssl-dev libncurses5-dev libncursesw5-dev
+```
+
+2. 克隆/进入仓库并构建：
+
+```bash
+mkdir build && cd build
+cmake ..
+make -j
+```
+
+3. 运行：
+
+```bash
+./crypto_trading
+```
+
+配置文件说明（项目使用的配置文件）：
+
+- `config/config.json`：主配置，包含交易所 API 基础 URL、交易选项（是否开启）、UI 刷新设置、以及代理设置等非敏感配置。
+- `config/symbols.json`：交易对列表（已拆分为独立文件，以便快速管理交易对）。
+- `config/secrets.json`：本地私密文件（仅示例，不应提交），可包含 `BINANCE_API_KEY` 与 `BINANCE_API_SECRET`；已在 `.gitignore` 中忽略。
+- `config/CONFIG_TEMPLATE.md`：配置模板与字段说明（参考并复制到 `config/config.json` / `config/secrets.json`）。
+- `scripts/run_template.sh`：启动脚本模板（不要将带有密钥的 `scripts/run.sh` 提交到仓库）。
+
+注意：当前仓库为演示骨架，交易功能为占位实现。将真实交易按需实现并谨慎测试。需要我为你：
+- 接入 Binance REST 签名并实现下单/撤单 API。
+- 添加 WebSocket 客户端以获取实时 K 线与深度。
+- 编写单元测试与 CI 配置。
+
+告诉我下一步需要实现的功能，我会继续把它做完整。
