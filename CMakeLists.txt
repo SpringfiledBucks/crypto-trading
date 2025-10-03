@@ -19,13 +19,20 @@ add_executable(crypto_trading
   src/binance_api.cpp
 )
 
+add_library(strategies_lib STATIC
+  strategies/elliott_harmonic_fib.cpp
+)
+
+target_include_directories(strategies_lib PRIVATE strategies include)
+
+
 target_include_directories(crypto_trading PRIVATE include)
 
 if(CURSES_FOUND)
   target_include_directories(crypto_trading PRIVATE ${CURSES_INCLUDE_DIRS})
-  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${CURSES_LIBRARIES} ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
+  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${CURSES_LIBRARIES} ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto strategies_lib)
 else()
-  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
+  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto strategies_lib)
 endif()
 
 # Install target
