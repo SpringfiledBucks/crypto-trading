@@ -36,3 +36,5 @@ systemd/crypto_trading_logrotate.timer
 
 # Archive artifacts
 archive/*.tgz
+# Unused python script backups (keep locally, do not track)
+archive/unused-python/
