@@ -44,3 +44,6 @@ install(TARGETS crypto_trading DESTINATION bin)
 add_executable(backtest tools/backtest.cpp)
 target_link_libraries(backtest PRIVATE strategies_lib)
 target_include_directories(backtest PRIVATE strategies include)
+
+add_executable(test_sse_client tools/test_sse_client.cpp)
+target_include_directories(test_sse_client PRIVATE include)
