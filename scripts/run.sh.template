@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 # Unified run script for this project. Supports start|stop|restart|status|install-systemd
+#
+# Usage notes (template):
+# - Copy this file to `scripts/run.sh` for local runtime and make it executable:
+#     cp scripts/run.sh.template scripts/run.sh
+#     chmod +x scripts/run.sh
+# - The script expects the project root layout (logs/, build/, config/).
+# - `config/config.json` may contain proxy settings under `proxy` and the
+#   `disable_history_download` boolean to short-circuit historical downloads.
+# - To install the user-level systemd timer for periodic refresh/rotate, run:
+#     scripts/run.sh install-systemd
+# - This file in the repo is a template. Do not track your local `scripts/run.sh`.
+#
 set -euo pipefail
 BASEDIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$BASEDIR"

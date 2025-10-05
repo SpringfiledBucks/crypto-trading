@@ -1,3 +1,15 @@
+[# Template]
+# Copy this file to ~/.config/systemd/user/crypto_trading.service (or adjust paths)
+# Replace `%h` in the WorkingDirectory/ExecStart paths with an absolute path if you
+# prefer system-level units. Example:
+#   WorkingDirectory=/home/crypto/crypto-trading
+#   ExecStart=/home/crypto/crypto-trading/scripts/run.sh start
+# To enable (user):
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/crypto_trading.service.template ~/.config/systemd/user/crypto_trading.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now crypto_trading.service
+
 [Unit]
 Description=Crypto Trading Service (template)
 After=network.target

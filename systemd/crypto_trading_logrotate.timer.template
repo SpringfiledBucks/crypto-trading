@@ -1,3 +1,8 @@
+[# Template]
+# Timer template to run logrotate on a schedule. Copy and enable in user
+# systemd or convert to a system-level timer by editing paths and using
+# /etc/systemd/system/ if appropriate.
+
 [Unit]
 Description=Run crypto_trading logrotate daily (template)
 
