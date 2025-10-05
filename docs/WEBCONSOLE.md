@@ -45,7 +45,7 @@ make -j
 
 示例快速检查流程
 1. 确保 trading 服务写入文件日志： `sudo systemctl show crypto_trading.service --property=Environment`，看是否包含 `LOG_TO_FILE=1`。
-2. 启动/重启 webconsole： `sudo systemctl restart crypto_webconsole.service`。
+2. 启动/重启服务： `sudo systemctl restart crypto_trading.service`。
 3. 打开浏览器访问 `http://127.0.0.1:8080/`，或使用上面的 curl 命令查看 `/status` 与 `/events`。
 
 更多信息参见项目根目录的 `README.md` 与 `docs/` 下其他文档。
@@ -53,7 +53,7 @@ make -j
 外网连通性排查（当外网无法访问 http://<public-ip>:8080/ 时）
 1. 确认服务已在本机启动并监听 8080：
    - `ss -ltnp | grep :8080` 或 `netstat -ltnp | grep :8080`
-2. 在公网机器上运行 `curl -v http://<public-ip>:8080/`，注意是否能建立 TCP 连接以及 HTTP 层返回的响应；如果 curl 能建立连接但显示 `Empty reply from server`，说明 TCP 到达但应用层未正确响应或进程崩溃，请查看服务日志 `/tmp/webconsole.out`。
+2. 在公网机器上运行 `curl -v http://<public-ip>:8080/`，注意是否能建立 TCP 连接以及 HTTP 层返回的响应；如果 curl 能建立连接但显示 `Empty reply from server`，说明 TCP 到达但应用层未正确响应或进程崩溃，请使用 systemd 日志查看（例如 `journalctl -u crypto_trading.service -f`）或检查仓库下的 `logs/` 目录中的日志文件。
 3. 检查宿主机是否处于 NAT/CGNAT/云提供商内网，ICMP 能通不代表 HTTP 可达；必要时联系网络提供商或配置公网转发。
 
 自动刷新与节流策略

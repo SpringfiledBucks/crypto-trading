@@ -51,3 +51,17 @@ tail -f logs/runtime.log
 6) 其他
 
 - 归档的 legacy 脚本位于 `archive/scripts/`。若需要恢复某个脚本，可从归档中复制回 `scripts/` 并审查其内容。
+
+验证 SSE（本地快速验证）
+
+仓库包含一个用于测试 SSE 的工具 `tools/test_sse_client.cpp`，它会连到 `http://127.0.0.1:8080/events` 并模拟向 `logs/runtime.log` 注入 `STATE_JSON` 行，验证服务器是否把事件推送到客户端。
+
+构建并运行：
+
+```bash
+cd build
+make test_sse_client
+./test_sse_client
+```
+
+若输出显示 `received=1`，说明 SSE 推送与日志 tailing 在当前环境下工作正常。

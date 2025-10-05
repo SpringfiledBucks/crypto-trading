@@ -33,29 +33,32 @@ make -j
 
 更多部署与 systemd 配置说明，请参阅 `docs/DEPLOY.md`。
 
-Web 控制台（轻量）
-仓库包含一个用于运行时监控的轻量 Web 控制台，功能包括：实时查看运行日志（SSE）、展示当前订阅的交易对、连接状态与最近订单，以及在无法联网时回退到本地缓存的 K 线数据。
+Web 控制台（轻量，C++ 后端）
 
-主要文件：C++ 后端 `src/webconsole_server.cpp`（由 `build/crypto_trading` 启动）与前端 `webconsole/index.html`。
+本仓库使用 C++ 实现后端并通过 SSE 向前端推送运行时状态与日志（`STATE_JSON`）。
+
+主要文件：
+- 后端：`src/webconsole_server.cpp`（由 `build/crypto_trading` 启动，默认监听 8080）
+- 前端静态文件：`webconsole/index.html`（前端只负责绘图与订阅 SSE）
+- 调试工具：`tools/test_sse_client.cpp`（集成到 CMake，可用于本地回归测试 SSE 行为）
 
 启动（编译并运行 C++ 二进制）：
 
 ```bash
-# 在 build 目录内构建
+# 在项目根目录下构建
 mkdir -p build && cd build
 cmake ..
 make -j
 
-# 运行 C++ webconsole / 数据发布进程（默认监听 8080）
+# 运行 C++ 程序（包含 webconsole）
 ./crypto_trading
 ```
 
 在浏览器中打开：
-```
-http://127.0.0.1:8080/
-```
 
-详细操作与部署信息请参见 `docs/WEBCONSOLE.md`。
+http://127.0.0.1:8080/
+
+详细操作与部署信息请参见 `docs/WEBCONSOLE.md` 和 `docs/DEPLOY.md`。
 
 
 配置文件说明（项目使用的配置文件）：
