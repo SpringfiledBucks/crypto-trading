@@ -60,6 +60,18 @@ static std::string fmt_double(double v) {
 // aggregation and indicators implemented in src/indicators.cpp
 
 void DataPublisher::run_loop() {
+    // check global config for temporary disable flag
+    try {
+        std::ifstream cfgf("config/config.json");
+        if(cfgf){
+            json cj; cfgf >> cj;
+            if(cj.contains("disable_history_download") && cj["disable_history_download"].is_boolean() && cj["disable_history_download"].get<bool>()){
+                Logger::info("DataPublisher: history download disabled via config, exiting publisher loop");
+                return;
+            }
+        }
+    } catch(...) {}
+
     // Try WebSocket-based subscription to 1m klines (combined streams) for lower latency and efficiency.
     std::vector<std::string> symbols;
     try {
