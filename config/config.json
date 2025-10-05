@@ -29,5 +29,5 @@
       "period_after_max_seconds": 30
     }
   }
-  ,"disable_history_download": false
+  ,"disable_history_download": true
 }
