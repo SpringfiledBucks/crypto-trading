@@ -26,3 +26,10 @@ build/
 logs/
 *.csv
 run.pid
+
+# Local systemd units (keep templates in repo, don't commit local installs)
+systemd/crypto_trading.service
+systemd/crypto_trading_refresh.service
+systemd/crypto_trading_refresh.timer
+systemd/crypto_trading_logrotate.service
+systemd/crypto_trading_logrotate.timer
