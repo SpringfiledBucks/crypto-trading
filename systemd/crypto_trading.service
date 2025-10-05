@@ -1,0 +1,14 @@
+[Unit]
+Description=Crypto Trading service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/crypto/crypto-trading
+ExecStart=/home/crypto/crypto-trading/scripts/run.sh start
+ExecStop=/home/crypto/crypto-trading/scripts/run.sh stop
+Restart=on-failure
+Environment=NO_UI=1
+
+[Install]
+WantedBy=default.target
