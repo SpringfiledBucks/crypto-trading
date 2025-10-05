@@ -24,7 +24,6 @@ async def main():
             else:
                 proxy_norm = PROXY_URL
             try:
-                # create connector inside this loop
                 from aiohttp_socks import ProxyConnector
                 connector = ProxyConnector.from_url(proxy_norm)
                 session_params['connector'] = connector

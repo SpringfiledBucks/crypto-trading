@@ -6,7 +6,8 @@ After=network.target
 Type=simple
 User=crypto
 WorkingDirectory=/home/crypto/crypto-trading
-ExecStart=/usr/bin/python3 /home/crypto/crypto-trading/webconsole/server.py --port 8080
+# ExecStart updated to use the compiled C++ binary. Ensure the binary exists at this path after building.
+ExecStart=/home/crypto/crypto-trading/build/crypto_trading
 Restart=on-failure
 
 [Install]

@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 本脚本用于在三种网络模式下测试 Binance 公共 API 的延迟：
-# 1) 直接直连
-# 2) 通过 HTTP 代理（示例：http://127.0.0.1:15615）
-# 3) 通过 SOCKS5 代理（示例：socks://127.0.0.1:15651）
-# 使用前请确保代理已启动并监听对应端口。本脚本不会启动代理。
-
 OUTFILE="binance_proxy_latency.csv"
 ENDPOINTS=(
   "https://api.binance.com/api/v3/ping"
@@ -29,7 +23,6 @@ for mode in direct http socks; do
       else
         proxy_args=(--socks5-hostname "$SOCKS_HOSTPORT")
       fi
-      # 容错执行 curl，记录总时长
       set +e
       time_total=$(curl -s -o /dev/null -w "%{time_total}" "${proxy_args[@]}" "$ep")
       exit_code=$?

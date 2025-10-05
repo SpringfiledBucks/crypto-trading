@@ -1,0 +1,13 @@
+[# Template]
+# Timer template to run the refresh service on a schedule. Copy into
+# ~/.config/systemd/user/ and enable with `systemctl --user enable --now`.
+
+[Unit]
+Description=Run crypto_trading refresh every hour (template)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
