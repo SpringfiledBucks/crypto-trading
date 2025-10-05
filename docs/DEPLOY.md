@@ -65,3 +65,10 @@ make test_sse_client
 ```
 
 若输出显示 `received=1`，说明 SSE 推送与日志 tailing 在当前环境下工作正常。
+
+示例：使用自定义参数运行测试
+
+```bash
+# 指定主机与端口，以及日志路径与超时
+./test_sse_client --host 127.0.0.1 --port 8080 --log /home/crypto/crypto-trading/logs/runtime.log --delay 2 --timeout 15
+```
