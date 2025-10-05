@@ -67,3 +67,9 @@ target_include_directories(proxy_traffic_monitor PRIVATE include)
 
 enable_testing()
 add_test(NAME smoke_klines_archive COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_klines_archive.sh)
+
+# convenience target to run smoke test script
+add_custom_target(smoke_test
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_klines_archive.sh
+  COMMENT "Run klines archive smoke test"
+)
