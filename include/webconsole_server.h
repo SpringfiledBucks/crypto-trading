@@ -17,6 +17,9 @@ private:
     std::string wwwroot_;
     std::atomic<bool> running_{false};
     std::thread worker_;
+    // counters for archive indicator cache usage
+    std::atomic<uint64_t> cache_hits_{0};
+    std::atomic<uint64_t> cache_misses_{0};
 
     void run();
 };

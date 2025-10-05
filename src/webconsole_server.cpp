@@ -219,42 +219,64 @@ void WebConsoleServer::run() {
                             for(auto &k: all){ int64_t ts = (int64_t)k[0]; if(ts >= start_ms && ts <= end_ms) outarr.push_back(k); }
                             if((int)outarr.size() > limit){ json tmp = json::array(); int start_idx = (int)outarr.size() - limit; for(int i=start_idx;i<(int)outarr.size();++i) tmp.push_back(outarr[i]); outarr = std::move(tmp); }
 
-                            // compute indicators (sma20, sma50, vwap20) on outarr
+                            // attempt to use precomputed per-month indicators (archive/*.ind.json.gz)
                             int n = (int)outarr.size();
-                            std::vector<double> closes(n, 0.0), vols(n, 0.0);
-                            for(int i=0;i<n;++i){ try{ closes[i] = std::stod(outarr[i][4].get<std::string>()); vols[i] = std::stod(outarr[i][5].get<std::string>()); } catch(...) { closes[i]=0.0; vols[i]=0.0; } }
+                            std::vector<int64_t> ts_list(n);
+                            std::unordered_map<int64_t,int> ts_to_idx;
+                            for(int i=0;i<n;++i){ ts_list[i] = (int64_t)outarr[i][0]; ts_to_idx[ts_list[i]] = i; }
 
-                            auto rolling_sma = [&](const std::vector<double> &vals, int window){
-                                json arr = json::array();
-                                if((int)vals.size()==0) return arr;
-                                std::vector<double> pref(vals.size()+1, 0.0);
-                                for(size_t i=0;i<vals.size();++i) pref[i+1] = pref[i] + vals[i];
-                                for(size_t i=0;i<vals.size();++i){
-                                    if((int)i >= window-1){ double s = pref[i+1] - pref[i+1-window]; arr.push_back(s / window); }
-                                    else arr.push_back(nullptr);
-                                }
-                                return arr;
-                            };
+                            std::vector<json> sma20_parts(n, nullptr), sma50_parts(n, nullptr), vwap20_parts(n, nullptr);
+                            bool all_present = true;
+                            // iterate months and try to map precomputed indicators
+                            for(auto &m: months){
+                                fs::path indp = fs::path("archive") / "klines" / symbol / (m + ".ind.json.gz");
+                                fs::path rawp = fs::path("archive") / "klines" / symbol / (m + ".json.gz");
+                                if(!fs::exists(indp) || !fs::exists(rawp)) { all_present = false; break; }
+                                try{
+                                    std::string indraw = load_gz_file(indp);
+                                    json indj = json::parse(indraw);
+                                    // load raw to align timestamps
+                                    std::string raw = load_gz_file(rawp);
+                                    json arrm = json::parse(raw);
+                                    // for each entry in month, if timestamp in our outarr range, pick indicator value
+                                    for(size_t i=0;i<arrm.size();++i){ int64_t ts = (int64_t)arrm[i][0]; auto it = ts_to_idx.find(ts); if(it!=ts_to_idx.end()){
+                                                int dst = it->second;
+                                                if(indj.contains("sma20") && indj["sma20"].is_array() && (int)indj["sma20"].size() > (int)i) sma20_parts[dst] = indj["sma20"][i];
+                                                if(indj.contains("sma50") && indj["sma50"].is_array() && (int)indj["sma50"].size() > (int)i) sma50_parts[dst] = indj["sma50"][i];
+                                                if(indj.contains("vwap20") && indj["vwap20"].is_array() && (int)indj["vwap20"].size() > (int)i) vwap20_parts[dst] = indj["vwap20"][i];
+                                        }
+                                    }
+                                } catch(...) { all_present = false; break; }
+                            }
 
-                            auto rolling_vwap = [&](const std::vector<double> &cl, const std::vector<double> &vl, int window){
-                                json arr = json::array();
-                                if((int)cl.size()==0) return arr;
-                                std::vector<double> tp(cl.size(), 0.0);
-                                for(size_t i=0;i<cl.size();++i) tp[i] = cl[i] * vl[i];
-                                std::vector<double> pref_num(tp.size()+1, 0.0), pref_den(tp.size()+1, 0.0);
-                                for(size_t i=0;i<tp.size();++i){ pref_num[i+1] = pref_num[i] + tp[i]; pref_den[i+1] = pref_den[i] + vl[i]; }
-                                for(size_t i=0;i<tp.size();++i){
-                                    if((int)i >= window-1){ double num = pref_num[i+1] - pref_num[i+1-window]; double den = pref_den[i+1] - pref_den[i+1-window]; if(den!=0) arr.push_back(num/den); else arr.push_back(nullptr); }
-                                    else arr.push_back(nullptr);
-                                }
-                                return arr;
-                            };
+                            json indicators;
+                            if(all_present){
+                                // verify none are null
+                                bool missing = false;
+                                for(int i=0;i<n;++i){ if(sma20_parts[i].is_null() && sma50_parts[i].is_null() && vwap20_parts[i].is_null()){ missing = true; break; } }
+                                if(!missing){
+                                    json s20 = json::array(); json s50 = json::array(); json v20 = json::array();
+                                    for(int i=0;i<n;++i){ s20.push_back(sma20_parts[i]); s50.push_back(sma50_parts[i]); v20.push_back(vwap20_parts[i]); }
+                                    indicators = json::object({{"sma20", s20}, {"sma50", s50}, {"vwap20", v20}});
+                                    // cache hit
+                                    this->cache_hits_.fetch_add(1);
+                                    Logger::info(std::string("/klines cache-hit for ")+symbol+" months="+std::to_string(months.size())+" out_count="+std::to_string(n));
+                                } else all_present = false;
+                            }
 
-                            json sma20 = rolling_sma(closes, 20);
-                            json sma50 = rolling_sma(closes, 50);
-                            json vwap20 = rolling_vwap(closes, vols, 20);
-
-                            json indicators = json::object({{"sma20", sma20}, {"sma50", sma50}, {"vwap20", vwap20}});
+                            if(!all_present){
+                                // fallback: compute indicators from outarr closes and vols
+                                this->cache_misses_.fetch_add(1);
+                                Logger::info(std::string("/klines cache-miss for ")+symbol+" months="+std::to_string(months.size())+" out_count="+std::to_string(n));
+                                std::vector<double> closes(n,0.0), vols(n,0.0);
+                                for(int i=0;i<n;++i){ try{ closes[i] = std::stod(outarr[i][4].get<std::string>()); vols[i] = std::stod(outarr[i][5].get<std::string>()); } catch(...) { closes[i]=0.0; vols[i]=0.0; } }
+                                auto rolling_sma = [&](const std::vector<double> &vals, int window){ json arr = json::array(); if((int)vals.size()==0) return arr; std::vector<double> pref(vals.size()+1, 0.0); for(size_t i=0;i<vals.size();++i) pref[i+1] = pref[i] + vals[i]; for(size_t i=0;i<vals.size();++i){ if((int)i >= window-1){ double s = pref[i+1] - pref[i+1-window]; arr.push_back(s / window); } else arr.push_back(nullptr); } return arr; };
+                                auto rolling_vwap = [&](const std::vector<double> &cl, const std::vector<double> &vl, int window){ json arr = json::array(); if((int)cl.size()==0) return arr; std::vector<double> tp(cl.size(), 0.0); for(size_t i=0;i<cl.size();++i) tp[i] = cl[i] * vl[i]; std::vector<double> pref_num(tp.size()+1, 0.0), pref_den(tp.size()+1, 0.0); for(size_t i=0;i<tp.size();++i){ pref_num[i+1] = pref_num[i] + tp[i]; pref_den[i+1] = pref_den[i] + vl[i]; } for(size_t i=0;i<tp.size();++i){ if((int)i >= window-1){ double num = pref_num[i+1] - pref_num[i+1-window]; double den = pref_den[i+1] - pref_den[i+1-window]; if(den!=0) arr.push_back(num/den); else arr.push_back(nullptr); } else arr.push_back(nullptr); } return arr; };
+                                json sma20 = rolling_sma(closes, 20);
+                                json sma50 = rolling_sma(closes, 50);
+                                json vwap20 = rolling_vwap(closes, vols, 20);
+                                indicators = json::object({{"sma20", sma20}, {"sma50", sma50}, {"vwap20", vwap20}});
+                            }
 
                             json out = json::object({{"symbol", symbol}, {"klines", outarr}, {"indicators", indicators}});
                             respond_text(out.dump(), "application/json", http::status::ok);
@@ -320,6 +342,10 @@ void WebConsoleServer::run() {
                             while(std::getline(ifs,line)) { auto pos = line.find("STATE_JSON "); if(pos!=std::string::npos) last = line.substr(pos+11); }
                             if(!last.empty()) try { st = json::parse(last); } catch(...) {}
                         }
+                        // include cache counters
+                        try {
+                            st["archive_indicator_cache"] = json::object({{"hits", this->cache_hits_.load()}, {"misses", this->cache_misses_.load()}});
+                        } catch(...) {}
                         respond_text(st.dump(), "application/json", http::status::ok);
                         s.shutdown(tcp::socket::shutdown_send);
                         return;
