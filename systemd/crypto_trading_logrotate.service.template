@@ -1,0 +1,11 @@
+[Unit]
+Description=Crypto Trading Logrotate (template)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/crypto-trading
+ExecStart=%h/crypto-trading/scripts/rotate_logs.sh
+
+[Install]
+WantedBy=multi-user.target

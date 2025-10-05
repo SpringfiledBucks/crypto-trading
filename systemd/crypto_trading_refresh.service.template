@@ -1,0 +1,11 @@
+[Unit]
+Description=Crypto Trading Refresh (template)
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/crypto-trading
+ExecStart=%h/crypto-trading/scripts/run.sh install-systemd
+
+[Install]
+WantedBy=multi-user.target
