@@ -3,24 +3,431 @@
   <head>
     <meta charset="utf-8" />
     <title>Crypto Trading Console</title>
+    <!-- explicit favicon to avoid browser requesting root /favicon.ico unexpectedly -->
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
     <style>
-      body { font-family: monospace; background:#111; color:#ddd; }
-      #log { white-space: pre-wrap; max-height: 90vh; overflow: auto; padding: 8px; }
+      body { font-family: monospace; background:#111; color:#ddd; margin: 12px; }
+      .panel { display:inline-block; vertical-align: top; padding: 8px; margin-right: 12px; background:#1a1a1a; border-radius:6px; }
+      #raw { white-space: pre-wrap; max-height: 70vh; overflow: auto; padding: 8px; width: 60vw; display:inline-block; vertical-align: top; background:#0b0b0b; border-radius:6px; }
+      h3 { margin:0 0 8px 0 }
+      .small { color:#9aa; font-size: 0.9em }
     </style>
   </head>
   <body>
-    <h3>Crypto Trading Console</h3>
-    <div id="log">Connecting...</div>
+    <h2>Crypto Trading Console</h2>
+    <div class="panel" id="panel-status">
+      <h3>Status</h3>
+      <div id="status">(loading)</div>
+      <h3>Connection</h3>
+      <div id="conn">(loading)</div>
+      <h3>Subscriptions</h3>
+      <div id="subs" class="small">(loading)</div>
+      <h3>Orders</h3>
+      <div id="orders" class="small">(loading)</div>
+    </div>
+    <div style="display:inline-block; vertical-align: top;">
+      <div id="chart" style="width:760px; height:480px; display:block; margin-bottom:12px; background:#0b0b0b; border-radius:6px;"></div>
+
+      <div style="background:#1a1a1a; padding:8px; border-radius:6px; margin-bottom:12px;">
+        <label for="symbolSelect">交易对：</label>
+        <select id="symbolSelect"></select>
+        <label for="intervalSelect" style="margin-left:8px;">周期：</label>
+        <select id="intervalSelect">
+          <option value="1m">1 分钟</option>
+          <option value="30m">30 分钟</option>
+          <option value="4h">4 小时</option>
+        </select>
+        <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="compactKlines" /> 紧凑数据</label>
+  <button id="reloadBtn">刷新 K 线</button>
+  <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="scrollLock" /> 滚动锁定</label>
+  <span style="margin-left:12px; color:#9aa;">K 线数据来自 Binance 公共 REST（如无法访问会回退到本地缓存）</span>
+      </div>
+
+      <div style="background:#1a1a1a; padding:8px; border-radius:6px;">
+        <h4 style="margin:0 0 8px 0">预期点位 / 支撑 / 压力</h4>
+        <div>
+          <input id="levelPrice" type="number" step="any" placeholder="价格" />
+          <select id="levelType">
+            <option value="target">目标</option>
+            <option value="resistance">压力</option>
+            <option value="support">支撑</option>
+          </select>
+          <input id="levelLabel" placeholder="标签 (可选)" />
+          <button id="addLevel">添加</button>
+        </div>
+        <div id="levelsList" class="small" style="margin-top:8px; white-space:pre-wrap; max-height:120px; overflow:auto;"></div>
+      </div>
+    </div>
+
+    <div id="raw">Connecting to log stream...</div>
+
+  <!-- Lightweight Charts (served locally under /static/; server will fetch/cache on demand) -->
+  <script src="/static/lightweight-charts.standalone.production.js"></script>
     <script>
+      // existing small UI pieces
+      const raw = document.getElementById('raw');
+      const statusEl = document.getElementById('status');
+      const connEl = document.getElementById('conn');
+      const subsEl = document.getElementById('subs');
+      const ordersEl = document.getElementById('orders');
+
+      // Chart and symbol management
+      let chart = null;
+      let candleSeries = null;
+      let priceRefreshTimer = null;
+  let currentSymbol = 'BTCUSDT';
+  let currentInterval = '1m';
+  let scrollLocked = false;
+  let autoReloadTimer = null;
+  let autoReloadRunning = false;
+
+      function isoToTime(ts) {
+        // Binance returns ms timestamps in klines; lightweight-charts expects { time: unix (seconds) }
+        return Math.round(ts / 1000);
+      }
+
+      // limit to at most 500 bars client-side; Binance also supports limit param up to 1000
+  async function fetchKlines(symbol, interval='1m', limit=500, compact=false) {
+        limit = Math.min(500, Math.max(10, Number(limit) || 500));
+  const url = `/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(limit)}&compact=${compact?1:0}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Klines fetch failed: ' + res.status);
+        const data = await res.json();
+        // server may return either an array (old behavior) or { klines: [...], indicators: {...} }
+        let arr = data;
+    if (data && typeof data === 'object' && Array.isArray(data.klines)) arr = data.klines;
+        if (!Array.isArray(arr)) throw new Error('Invalid klines payload');
+        // transform and ensure at most 500 bars
+    // support two formats: full binance array or compact object {time,open,high,low,close,volume}
+    const transformed = arr.map(c => {
+      if (Array.isArray(c)) return ({ time: isoToTime(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) });
+      return ({ time: Number(c.time), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume) });
+    });
+        if (transformed.length > 500) return transformed.slice(-500);
+        return transformed;
+      }
+
+      function createChart(data, levels) {
+        if (chart) {
+          try { chart.remove(); } catch(e){}
+        }
+        // responsive sizing: chart container controls size
+        chart = LightweightCharts.createChart(document.getElementById('chart'), {
+          width: document.getElementById('chart').clientWidth,
+          height: document.getElementById('chart').clientHeight,
+          layout: { background: { color: '#0b0b0b' }, textColor: '#d1d1d1' },
+          grid: { vertLines: { color: '#161616' }, horzLines: { color: '#161616' } },
+          rightPriceScale: { borderVisible: false },
+          timeScale: { timeVisible: true, secondsVisible: false, borderVisible: false }
+        });
+
+        // helper to support different lwc versions: prefer specific helpers, else fall back to addSeries + descriptor
+        function addSeriesCompat(chart, kind, opts) {
+          try {
+            if (kind === 'candlestick') {
+              if (typeof chart.addCandlestickSeries === 'function') return chart.addCandlestickSeries(opts);
+              if (typeof chart.addSeries === 'function' && window.LightweightCharts && window.LightweightCharts.CandlestickSeries) return chart.addSeries(window.LightweightCharts.CandlestickSeries, opts);
+            }
+            if (kind === 'histogram') {
+              if (typeof chart.addHistogramSeries === 'function') return chart.addHistogramSeries(opts);
+              if (typeof chart.addSeries === 'function' && window.LightweightCharts && window.LightweightCharts.HistogramSeries) return chart.addSeries(window.LightweightCharts.HistogramSeries, opts);
+            }
+            if (kind === 'line') {
+              if (typeof chart.addLineSeries === 'function') return chart.addLineSeries(opts);
+              if (typeof chart.addSeries === 'function' && window.LightweightCharts && window.LightweightCharts.LineSeries) return chart.addSeries(window.LightweightCharts.LineSeries, opts);
+            }
+          } catch(e) {
+            console.warn('addSeriesCompat fallback error', e);
+          }
+          throw new Error('No compatible series API available');
+        }
+
+        candleSeries = addSeriesCompat(chart, 'candlestick', {
+          upColor: '#4caf50', downColor: '#ff5252', borderVisible: true, borderColor: '#333', wickVisible: true
+        });
+
+        // debug: report library version and chart API shape (helps troubleshoot addCandlestickSeries errors)
+        try {
+          console.debug('LightweightCharts version:', window.LightweightCharts && typeof window.LightweightCharts.version === 'function' ? window.LightweightCharts.version() : '(unknown)');
+          const methods = Object.keys(chart).filter(k => typeof chart[k] === 'function');
+          console.debug('chart methods:', methods);
+          console.debug('has addCandlestickSeries:', typeof chart.addCandlestickSeries === 'function');
+          console.debug('has addSeries:', typeof chart.addSeries === 'function');
+        } catch (e) {
+          console.warn('chart debug failed', e);
+        }
+
+        // prepare candlestick data without volume for candlestick series
+        const candleData = (data || []).map(d => ({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close }));
+        candleSeries.setData(candleData);
+
+        // volume histogram below
+        const volumeSeries = addSeriesCompat(chart, 'histogram', {
+          priceFormat: { type: 'volume' },
+          priceScaleId: '',
+          scaleMargins: { top: 0.8, bottom: 0 },
+          lastValueVisible: false,
+        });
+        const vols = (data || []).map(d => ({ time: d.time, value: d.volume, color: d.close >= d.open ? 'rgba(76,175,80,0.6)' : 'rgba(255,82,82,0.6)' }));
+        volumeSeries.setData(vols);
+
+  // draw levels as price lines on main series
+        if (Array.isArray(levels)) {
+          for (const lv of levels) {
+            const color = lv.type === 'target' ? '#ffd166' : (lv.type === 'resistance' ? '#ef476f' : '#06d6a0');
+            try {
+              candleSeries.createPriceLine({ price: Number(lv.price), color: color, lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: lv.label || lv.type });
+            } catch(e) {
+              // ignore if unsupported
+            }
+          }
+        }
+
+  // SMA / VWAP lines will be drawn as line series (compatible across lwc versions)
+  const sma20 = addSeriesCompat(chart, 'line', { color: '#ffd166', lineWidth: 1 });
+  const sma50 = addSeriesCompat(chart, 'line', { color: '#89cff0', lineWidth: 1 });
+  const vwap = addSeriesCompat(chart, 'line', { color: '#f78fb3', lineWidth: 1 });
+
+        // crosshair tooltip
+        const tooltip = document.createElement('div');
+        tooltip.style.cssText = 'position: absolute; display: none; pointer-events: none; padding:6px; background: rgba(0,0,0,0.7); color: #fff; font-size:12px; border-radius:4px;';
+        document.body.appendChild(tooltip);
+
+        chart.subscribeCrosshairMove(function(param){
+          if (!param || !param.time) { tooltip.style.display = 'none'; return; }
+          let price = null;
+          try {
+            // preferred API: seriesPrices is a Map
+            if (param.seriesPrices && typeof param.seriesPrices.get === 'function') {
+              price = param.seriesPrices.get(candleSeries);
+            } else if (param.seriesData && typeof param.seriesData === 'object') {
+              // fallback: try to pick first series data entry
+              const vals = Object.values(param.seriesData);
+              if (vals && vals.length) price = vals[0];
+            }
+          } catch (e) {
+            price = null;
+          }
+          if (!price) { tooltip.style.display = 'none'; return; }
+          const date = new Date(Number(param.time) * 1000);
+          tooltip.style.display = 'block';
+          tooltip.style.left = (param.point.x + 12) + 'px';
+          tooltip.style.top = (param.point.y + 12) + 'px';
+          tooltip.innerHTML = `<div style="font-weight:bold">${currentSymbol}</div>
+            <div>${date.toLocaleString()}</div>
+            <div>O: ${price.open} H: ${price.high} L: ${price.low} C: ${price.close}</div>`;
+        });
+
+        // responsive
+        window.addEventListener('resize', ()=>{
+          try { chart.applyOptions({ width: document.getElementById('chart').clientWidth, height: document.getElementById('chart').clientHeight }); }
+          catch(e){}
+        });
+        return { sma20, sma50, vwap };
+      }
+
+      let activeSeriesHandles = null;
+      async function loadAndRender(symbol) {
+        try {
+          const interval = currentInterval || '1m';
+          const compact = document.getElementById('compactKlines').checked;
+          // use a single display limit for both the chart and indicator requests
+          const displayLimit = 500;
+          const res = await fetchKlines(symbol, interval, displayLimit, compact);
+          // debug: also fetch raw response for visibility when debugging
+          try {
+            fetch(`/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(displayLimit)}`)
+              .then(r=>r.text())
+              .then(t=>{ document.getElementById('raw').textContent = '[raw /klines response]\n' + t + '\n' + document.getElementById('raw').textContent; })
+              .catch(e=>{ document.getElementById('raw').textContent = '[raw /klines fetch error] ' + e + '\n' + document.getElementById('raw').textContent; });
+          } catch(e) {
+            document.getElementById('raw').textContent = '[raw fetch exception] ' + e + '\n' + document.getElementById('raw').textContent;
+          }
+          // server now returns { klines: [...], indicators: { sma20: [...], sma50: [...], vwap20: [...] } }
+          // since fetchKlines returns transformed candle array, but server also may return indicators in a separate field
+          // fetchKlines returned transformed candles; to get indicators we make a light call to /klines without compact to fetch indicators only
+          let indicators = {};
+          try {
+            // fetch indicators using the same limit used to populate the chart
+            const infoRes = await fetch(`/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(displayLimit)}`);
+            if (infoRes.ok) {
+              const infoJson = await infoRes.json();
+              indicators = infoJson.indicators || {};
+            }
+          } catch(e) {}
+          const klines = res;
+          const levels = loadLevelsForSymbol(symbol);
+          const handles = createChart(klines, levels);
+          // map indicator arrays (expected [ [ts_seconds, value], ... ])
+          if (handles) {
+            try { handles.sma20.setData((indicators.sma20||[]).map(p=>({ time: p[0], value: p[1] }))); } catch(e){}
+            try { handles.sma50.setData((indicators.sma50||[]).map(p=>({ time: p[0], value: p[1] }))); } catch(e){}
+            try { handles.vwap.setData((indicators.vwap20||[]).map(p=>({ time: p[0], value: p[1] }))); } catch(e){}
+            activeSeriesHandles = handles;
+            // 如果没有锁定滚动，尝试将时间轴滚回实时（兼容不同 lwc 版本）
+            try {
+              if (!scrollLocked && chart && typeof chart.timeScale === 'function') {
+                const ts = chart.timeScale();
+                if (ts && typeof ts.scrollToRealTime === 'function') ts.scrollToRealTime();
+                // for older API that provides scrollToRealTime on chart directly
+                if (chart && typeof chart.scrollToRealTime === 'function') chart.scrollToRealTime();
+              }
+            } catch(e) {}
+          }
+        } catch(e) {
+          console.error('loadAndRender error', e);
+          // clear visible chart data so stale bars are not shown when fetch fails
+          try {
+            if (candleSeries && typeof candleSeries.setData === 'function') candleSeries.setData([]);
+            if (activeSeriesHandles) {
+              try { activeSeriesHandles.sma20.setData([]); } catch(_){}
+              try { activeSeriesHandles.sma50.setData([]); } catch(_){}
+              try { activeSeriesHandles.vwap.setData([]); } catch(_){}
+            }
+          } catch(_){}
+          raw.textContent += '\n[chart error] ' + (e && e.message ? e.message : String(e)) + '\n';
+          raw.scrollTop = raw.scrollHeight;
+        }
+      }
+
+      // levels in localStorage as map symbol -> array
+      function loadAllLevels() {
+        try { return JSON.parse(localStorage.getItem('levels') || '{}'); } catch(e){ return {}; }
+      }
+      function saveAllLevels(obj) { localStorage.setItem('levels', JSON.stringify(obj)); }
+      function loadLevelsForSymbol(sym) { const all=loadAllLevels(); return all[sym] || []; }
+      function addLevelForSymbol(sym, price, type, label) {
+        const all = loadAllLevels();
+        all[sym] = all[sym] || [];
+        all[sym].push({ price: Number(price), type: type, label: label });
+        saveAllLevels(all);
+      }
+      function removeLevelsForSymbol(sym) { const all=loadAllLevels(); delete all[sym]; saveAllLevels(all); }
+
+      function renderLevelsList(sym) {
+        const lst = document.getElementById('levelsList');
+        const arr = loadLevelsForSymbol(sym);
+        if (!arr.length) { lst.textContent = '(无)'; return; }
+        lst.innerHTML = '';
+        arr.forEach((lv,i)=>{
+          const el = document.createElement('div');
+          el.textContent = `${lv.type} ${lv.price} ${lv.label ? '- ' + lv.label : ''}`;
+          const btn = document.createElement('button'); btn.textContent='删除'; btn.style.marginLeft='8px';
+          btn.onclick = ()=>{ const all=loadAllLevels(); all[sym].splice(i,1); saveAllLevels(all); loadAndRender(sym); renderLevelsList(sym); };
+          el.appendChild(btn);
+          lst.appendChild(el);
+        })
+      }
+
+      // SSE handling (existing)
       const evt = new EventSource('/events');
-      const log = document.getElementById('log');
-      evt.onmessage = function(e) {
-        log.textContent += '\n' + e.data;
-        log.scrollTop = log.scrollHeight;
-      }
+      evt.addEventListener('message', function(e){
+        // raw event
+        raw.textContent += '\n' + e.data;
+        raw.scrollTop = raw.scrollHeight;
+      });
+      evt.addEventListener('state', function(e){
+        try {
+          const s = JSON.parse(e.data);
+          statusEl.textContent = s.status || '(none)';
+          connEl.textContent = s.connection || '(none)';
+          subsEl.textContent = (s.subscriptions || []).join(', ');
+          ordersEl.textContent = (s.orders || []).slice(-20).join('\n');
+
+          // populate symbol dropdown from subscriptions
+          const sel = document.getElementById('symbolSelect');
+          const subs = s.subscriptions || [];
+          // prefer the currently-selected symbol (user choice) over the select's existing value
+          const prev = currentSymbol || sel.value;
+          sel.innerHTML = '';
+          for (const sym of subs) {
+            const o = document.createElement('option'); o.value = sym; o.textContent = sym; sel.appendChild(o);
+          }
+          if (subs.includes(prev)) sel.value = prev; else if (subs.length) sel.value = subs[0];
+          const newSymbol = sel.value || currentSymbol;
+          // only update and re-render if the effective symbol changed to avoid tearing user interactions
+          if (newSymbol !== currentSymbol) {
+            currentSymbol = newSymbol;
+            renderLevelsList(currentSymbol);
+            // refresh chart for the newly selected symbol
+            loadAndRender(currentSymbol);
+          } else {
+            // still refresh levels (in case levels were added/removed externally)
+            renderLevelsList(currentSymbol);
+          }
+        } catch(ex) {
+          console.error('state parse', ex, e.data);
+        }
+      });
       evt.onerror = function() {
-        log.textContent += '\n[connection lost]';
+        raw.textContent += '\n[connection lost]';
       }
+
+      // UI bindings
+  document.getElementById('reloadBtn').onclick = ()=>{ const sym=document.getElementById('symbolSelect').value || currentSymbol; currentSymbol=sym; currentInterval = document.getElementById('intervalSelect').value || currentInterval; loadAndRender(sym); renderLevelsList(sym); window.startAutoReload && window.startAutoReload(); };
+  document.getElementById('symbolSelect').onchange = (ev)=>{ currentSymbol = ev.target.value; currentInterval = document.getElementById('intervalSelect').value || currentInterval; loadAndRender(currentSymbol); renderLevelsList(currentSymbol); window.startAutoReload && window.startAutoReload(); };
+  document.getElementById('intervalSelect').onchange = (ev)=>{ currentInterval = ev.target.value || currentInterval; loadAndRender(currentSymbol); window.startAutoReload && window.startAutoReload(); };
+  document.getElementById('scrollLock').onchange = (ev)=>{ scrollLocked = !!ev.target.checked; };
+      document.getElementById('addLevel').onclick = ()=>{
+        const p = document.getElementById('levelPrice').value;
+        const t = document.getElementById('levelType').value;
+        const l = document.getElementById('levelLabel').value;
+        if (!p) return alert('请输入价格');
+        addLevelForSymbol(currentSymbol, p, t, l);
+        loadAndRender(currentSymbol);
+        renderLevelsList(currentSymbol);
+      };
+
+      // initial bootstrap + auto reload
+      (async ()=>{
+        try {
+          // Load configured symbols from server-side config (config/symbols.json) via /symbols endpoint
+          const s = await fetch('/symbols');
+          const sel = document.getElementById('symbolSelect');
+          sel.innerHTML = '';
+          if (s.ok) {
+            const js = await s.json();
+            const subs = js.symbols || js || [];
+            for (const sym of subs) { const o=document.createElement('option'); o.value=sym; o.textContent=sym; sel.appendChild(o); }
+            if (subs.length) { currentSymbol = subs[0]; sel.value = currentSymbol; }
+          } else {
+            // fallback to /status if /symbols unavailable
+            try {
+              const st = await fetch('/status');
+              if (st.ok) {
+                const js = await st.json();
+                const subs = js.subscriptions || [];
+                for (const sym of subs) { const o=document.createElement('option'); o.value=sym; o.textContent=sym; sel.appendChild(o); }
+                if (subs.length) { currentSymbol = subs[0]; sel.value = currentSymbol; }
+              }
+            } catch(e){}
+          }
+        } catch(e){ console.warn('Failed to load /symbols, will try /status', e); }
+        await loadAndRender(currentSymbol);
+        renderLevelsList(currentSymbol);
+        // auto reload interval depends on selected timeframe to avoid excessive polling
+        function getRefreshMsForInterval(interval) {
+          if (!interval) return 5000;
+          if (interval === '1m') return 5000;        // 5s for 1m (interactive)
+          if (interval === '30m') return 60000;      // 60s for 30m
+          if (interval === '4h') return 300000;      // 5min for 4h
+          return 5000;
+        }
+        // expose startAutoReload so other handlers can restart the timer safely
+        window.startAutoReload = function startAutoReload() {
+          if (autoReloadTimer) clearInterval(autoReloadTimer);
+          const ms = getRefreshMsForInterval(currentInterval);
+          autoReloadTimer = setInterval(async ()=>{
+            if (autoReloadRunning) return; // avoid overlapping
+            autoReloadRunning = true;
+            try { await loadAndRender(currentSymbol); renderLevelsList(currentSymbol); } catch(e) {}
+            autoReloadRunning = false;
+          }, ms);
+        }
+
+        // start initial auto reload
+        startAutoReload();
+      })();
     </script>
   </body>
 </html>

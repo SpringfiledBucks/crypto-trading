@@ -1,0 +1,13 @@
+[Unit]
+Description=Crypto Trading - refresh sample (one-shot)
+Documentation=README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/crypto/crypto-trading
+ExecStart=/home/crypto/crypto-trading/scripts/monitor_refresh.sh
+Nice=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

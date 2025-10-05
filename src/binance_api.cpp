@@ -28,6 +28,12 @@ std::optional<long long> BinanceAPI::get_server_time() {
     std::string url = base_url_ + "/fapi/v1/time";
     std::string resp;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    // respect environment proxy if set
+    const char *http_proxy = std::getenv("HTTP_PROXY");
+    const char *https_proxy = std::getenv("HTTPS_PROXY");
+    if(https_proxy) curl_easy_setopt(curl, CURLOPT_PROXY, https_proxy);
+    else if(http_proxy) curl_easy_setopt(curl, CURLOPT_PROXY, http_proxy);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
     CURLcode res = curl_easy_perform(curl);
@@ -67,6 +73,12 @@ std::optional<BinanceResponse> BinanceAPI::send_signed_request(const std::string
     headers = curl_slist_append(headers, std::string("X-MBX-APIKEY: " + api_key_).c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    // respect proxy environment
+    const char *http_proxy = std::getenv("HTTP_PROXY");
+    const char *https_proxy = std::getenv("HTTPS_PROXY");
+    if(https_proxy) curl_easy_setopt(curl, CURLOPT_PROXY, https_proxy);
+    else if(http_proxy) curl_easy_setopt(curl, CURLOPT_PROXY, http_proxy);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
     if(method == "POST") curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     std::string resp;

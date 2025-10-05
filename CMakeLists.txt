@@ -12,6 +12,9 @@ find_package(Boost REQUIRED COMPONENTS system thread)
 add_executable(crypto_trading
   src/main.cpp
   src/http_client.cpp
+  src/data_publisher.cpp
+  src/indicators.cpp
+  src/webconsole_server.cpp
   src/trader.cpp
   src/console_ui.cpp
   src/websocket_client.cpp

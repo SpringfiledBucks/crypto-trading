@@ -82,6 +82,13 @@ bool WebSocketClient::connect(const std::string &url) {
         tcp::socket sock(ioc);
         if(use_proxy) {
             auto const results = resolver.resolve(proxy_host, proxy_port);
+            // Log resolved proxy endpoints for debugging (IPv4 vs IPv6, ordering)
+            for(auto it = results.begin(); it != results.end(); ++it) {
+                try {
+                    auto ep = it->endpoint();
+                    Logger::info(std::string("Resolved proxy endpoint: ") + ep.address().to_string() + ":" + std::to_string(ep.port()));
+                } catch(...) {}
+            }
             net::connect(sock, results.begin(), results.end());
             // send CONNECT
             std::string connect_req = "CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\nConnection: keep-alive\r\n\r\n";
@@ -97,7 +104,39 @@ bool WebSocketClient::connect(const std::string &url) {
             }
         } else {
             auto const results = resolver.resolve(host, port);
-            net::connect(sock, results.begin(), results.end());
+            // Collect IPv4 then IPv6 endpoints to prefer IPv4 on systems where IPv6 isn't routable
+            std::vector<tcp::endpoint> v4endpoints;
+            std::vector<tcp::endpoint> v6endpoints;
+            for(auto it = results.begin(); it != results.end(); ++it) {
+                try {
+                    auto ep = it->endpoint();
+                    Logger::info(std::string("Resolved endpoint: ") + ep.address().to_string() + ":" + std::to_string(ep.port()));
+                    if(ep.address().is_v4()) v4endpoints.push_back(ep);
+                    else v6endpoints.push_back(ep);
+                } catch(...) {}
+            }
+            bool connected = false;
+            boost::system::error_code ec;
+            // try IPv4 endpoints first
+            for(auto &ep : v4endpoints) {
+                try {
+                    sock.connect(ep, ec);
+                    if(!ec) { connected = true; break; }
+                } catch(...) { }
+            }
+            // then try IPv6 endpoints if IPv4 failed
+            if(!connected) {
+                for(auto &ep : v6endpoints) {
+                    try {
+                        sock.connect(ep, ec);
+                        if(!ec) { connected = true; break; }
+                    } catch(...) { }
+                }
+            }
+            if(!connected) {
+                Logger::error(std::string("WS connect: failed to connect to any resolved endpoint for host ") + host);
+                return false;
+            }
         }
 
     // wrap socket into beast tcp_stream then ssl_stream
