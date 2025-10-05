@@ -16,19 +16,15 @@ OUTDIR_LATEST = os.path.join(BASE, 'data', 'latest')
 
 
 def rolling_sma(values, window):
-    out = [None] * len(values)
-    s = 0.0
-    q = []
-    for i, v in enumerate(values):
-        if v is None:
-            q.append(0.0)
-            s += 0.0
-        else:
-            q.append(v)
-            s += v
-        if i >= window:
-            s -= q[i-window]
-        if i >= window-1:
+    # efficient O(N) via prefix sums; treat None as 0.0 (same semantics as before)
+    n = len(values)
+    out = [None] * n
+    pref = [0.0]
+    for v in values:
+        pref.append(pref[-1] + (v if v is not None else 0.0))
+    for i in range(n):
+        if i >= window - 1:
+            s = pref[i+1] - pref[i+1-window]
             out[i] = s / window
         else:
             out[i] = None
@@ -36,22 +32,20 @@ def rolling_sma(values, window):
 
 
 def rolling_vwap(close_vals, vol_vals, window):
-    out = [None] * len(close_vals)
-    tp_vol = [ ( (c if c is not None else 0.0) * (v if v is not None else 0.0) ) for c,v in zip(close_vals, vol_vals) ]
-    s_num = 0.0
-    s_den = 0.0
-    numq = []
-    denq = []
-    for i in range(len(close_vals)):
-        numq.append(tp_vol[i])
-        denq.append(vol_vals[i] if vol_vals[i] is not None else 0.0)
-        s_num += numq[i]
-        s_den += denq[i]
-        if i >= window:
-            s_num -= numq[i-window]
-            s_den -= denq[i-window]
-        if i >= window-1:
-            out[i] = (s_num / s_den) if s_den != 0 else None
+    # efficient O(N) via prefix sums; treat None as 0.0
+    n = len(close_vals)
+    out = [None] * n
+    tp = [ ( (c if c is not None else 0.0) * (v if v is not None else 0.0) ) for c, v in zip(close_vals, vol_vals) ]
+    pref_num = [0.0]
+    pref_den = [0.0]
+    for i in range(n):
+        pref_num.append(pref_num[-1] + tp[i])
+        pref_den.append(pref_den[-1] + (vol_vals[i] if vol_vals[i] is not None else 0.0))
+    for i in range(n):
+        if i >= window - 1:
+            num = pref_num[i+1] - pref_num[i+1-window]
+            den = pref_den[i+1] - pref_den[i+1-window]
+            out[i] = (num / den) if den != 0 else None
         else:
             out[i] = None
     return out
@@ -83,6 +77,7 @@ def compute_for_file(path):
         closes.append(close)
         vols.append(vol)
 
+    # compute efficiently
     sma20 = rolling_sma(closes, 20)
     sma50 = rolling_sma(closes, 50)
     vwap20 = rolling_vwap(closes, vols, 20)
@@ -112,6 +107,7 @@ def compute_for_file(path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--symbol')
+    p.add_argument('--since-ts', type=int, help='optional start timestamp in ms to indicate incremental update')
     p.add_argument('--all', action='store_true')
     args = p.parse_args()
 
@@ -128,6 +124,8 @@ def main():
         if not os.path.exists(f):
             print('file not found', f); continue
         print('Processing', f)
+        # simple incremental: if since-ts provided, we still recompute indicators efficiently (O(N))
+        # For small 'latest' files (<=500 bars) this is fast; keeping API for future partial writes.
         compute_for_file(f)
 
 

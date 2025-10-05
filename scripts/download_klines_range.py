@@ -54,7 +54,8 @@ def iso_to_ms(s):
 
 
 def ms_to_iso(ms):
-    return datetime.datetime.utcfromtimestamp(ms/1000).strftime('%Y-%m-%dT%H:%M:%SZ')
+    # use timezone-aware API to avoid deprecation
+    return datetime.datetime.fromtimestamp(ms/1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def ensure_dir(p):
@@ -243,7 +244,7 @@ def download_symbol(sym, start_iso, end_iso=None):
     by_month = {}
     for k in all_klines:
         ts = int(k[0])
-        dt = datetime.datetime.utcfromtimestamp(ts/1000)
+        dt = datetime.datetime.fromtimestamp(ts/1000, datetime.timezone.utc)
         key = f'{dt.year:04d}-{dt.month:02d}'
         by_month.setdefault(key, []).append(k)
     for key, arr in by_month.items():
@@ -266,6 +267,16 @@ def download_symbol(sym, start_iso, end_iso=None):
 
     # update latest with last 500 bars
     write_latest(sym, all_klines, max_bars=500)
+    # after writing latest, invoke incremental indicator computation for this symbol (fast)
+    try:
+        # compute_indicators accepts --symbol and optional --since-ts (ms). We pass since-ts as the earliest ts we have
+        earliest = int(all_klines[0][0]) if len(all_klines) else None
+        cmd = ['python3', os.path.join(BASE, 'scripts', 'compute_indicators.py'), '--symbol', sym]
+        if earliest:
+            cmd += ['--since-ts', str(earliest)]
+        subprocess.check_call(cmd)
+    except Exception as e:
+        print('  incremental indicators failed', e)
 
 
 def main():
