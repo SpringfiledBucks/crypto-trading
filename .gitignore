@@ -25,3 +25,4 @@ scripts/run.sh
 build/
 logs/
 *.csv
+run.pid
