@@ -5,6 +5,23 @@ After=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=%h/crypto-trading
+ExecStart=/usr/bin/env python3 %h/crypto-trading/scripts/precompute_aggregates.py --all
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=1800
+# Redirect stdout/stderr to a user-writable path under ~/.config
+StandardOutput=append:%h/.config/crypto-trading/logs/precompute.log
+StandardError=append:%h/.config/crypto-trading/logs/precompute.log
+Nice=10
+
+[Install]
+WantedBy=default.target
+[Unit]
+Description=Precompute Kline Aggregates for crypto-trading
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/crypto-trading
 ExecStart=/usr/bin/env python3 %h/crypto-trading/scripts/precompute_aggregates.py
 Environment=PYTHONUNBUFFERED=1
 TimeoutStartSec=1800
