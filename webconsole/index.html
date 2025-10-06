@@ -38,6 +38,8 @@
           <option value="4h">4 小时</option>
         </select>
         <span id="currentIntervalDisplay" style="margin-left:8px;color:#9aa">(interval: 1m)</span>
+  <span id="dataSource" style="margin-left:12px;color:#7fc97f">(source: -)</span>
+  <span id="availableCount" style="margin-left:8px;color:#9aa">(available: -)</span>
         <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="compactKlines" /> 紧凑数据</label>
   <button id="reloadBtn">刷新 K 线</button>
   <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="scrollLock" /> 滚动锁定</label>
@@ -88,54 +90,69 @@
       }
 
       // limit to at most 500 bars client-side; Binance also supports limit param up to 1000
+  // fetchKlines: returns an object { klines: transformedArray, indicators: {...}, source: string, available: number }
   async function fetchKlines(symbol, interval='1m', limit=500, compact=false) {
         limit = Math.min(500, Math.max(10, Number(limit) || 500));
-  const url = `/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(limit)}&compact=${compact?1:0}`;
+    const url = `/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(limit)}&compact=${compact?1:0}`;
         const res = await fetch(url);
         if (!res.ok) throw new Error('Klines fetch failed: ' + res.status);
         const data = await res.json();
-        // server may return either an array (old behavior) or { klines: [...], indicators: {...} }
-        let arr = data;
-    if (data && typeof data === 'object' && Array.isArray(data.klines)) arr = data.klines;
-        if (!Array.isArray(arr)) throw new Error('Invalid klines payload');
-        // transform and ensure at most 500 bars
-    // support two formats: full binance array or compact object {time,open,high,low,close,volume}
-    let transformed = arr.map(c => {
-      if (Array.isArray(c)) return ({ time: isoToTime(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) });
-      return ({ time: Number(c.time), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume) });
-    });
 
-    // if server returned finer-grained data than requested (e.g. returned 1m for a 30m request),
-    // aggregate client-side as a fallback.
-    const mapping = { '1m': 60, '30m': 60*30, '4h': 60*60*4 };
-    try {
-      if (interval in mapping && transformed.length >= 2) {
-        const delta = transformed[1].time - transformed[0].time;
-        const reqBucket = mapping[interval];
-        if (delta < reqBucket) {
-          // aggregate into buckets of reqBucket seconds
-          const groups = new Map();
-          for (const d of transformed) {
-            const bucket = Math.floor(d.time / reqBucket) * reqBucket;
-            if (!groups.has(bucket)) {
-              groups.set(bucket, { time: bucket, open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume });
-            } else {
-              const g = groups.get(bucket);
-              g.high = Math.max(g.high, d.high);
-              g.low = Math.min(g.low, d.low);
-              g.close = d.close;
-              g.volume = g.volume + d.volume;
+        // normalize: server may return array or { klines: [...], indicators, source, available }
+        let rawArr = null;
+        let indicators = {};
+        let source = null;
+        let available = 0;
+        if (data && typeof data === 'object' && Array.isArray(data.klines)){
+            rawArr = data.klines;
+            indicators = data.indicators || {};
+            source = data.source || null;
+            available = typeof data.available === 'number' ? data.available : (Array.isArray(rawArr)? rawArr.length : 0);
+        } else if (Array.isArray(data)){
+            rawArr = data;
+            available = rawArr.length;
+        } else {
+            // unknown payload
+            throw new Error('Invalid klines payload');
+        }
+
+        // transform rawArr into chart-friendly objects
+        let transformed = rawArr.map(c => {
+            if (Array.isArray(c)) return ({ time: isoToTime(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) });
+            return ({ time: Number(c.time), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume) });
+        });
+
+        // if server returned finer-grained data than requested (e.g. returned 1m for a 30m request),
+        // aggregate client-side as a fallback.
+        const mapping = { '1m': 60, '30m': 60*30, '4h': 60*60*4 };
+        try {
+          if (interval in mapping && transformed.length >= 2) {
+            const delta = transformed[1].time - transformed[0].time;
+            const reqBucket = mapping[interval];
+            if (delta < reqBucket) {
+              // aggregate into buckets of reqBucket seconds
+              const groups = new Map();
+              for (const d of transformed) {
+                const bucket = Math.floor(d.time / reqBucket) * reqBucket;
+                if (!groups.has(bucket)) {
+                  groups.set(bucket, { time: bucket, open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume });
+                } else {
+                  const g = groups.get(bucket);
+                  g.high = Math.max(g.high, d.high);
+                  g.low = Math.min(g.low, d.low);
+                  g.close = d.close;
+                  g.volume = g.volume + d.volume;
+                }
+              }
+              const agg = Array.from(groups.values()).sort((a,b)=>a.time-b.time);
+              transformed = agg;
             }
           }
-          const agg = Array.from(groups.values()).sort((a,b)=>a.time-b.time);
-          transformed = agg;
-        }
-      }
-    } catch(e) { console.warn('client-side aggregation failed', e); }
+        } catch(e) { console.warn('client-side aggregation failed', e); }
 
-    if (transformed.length > 500) return transformed.slice(-500);
-    return transformed;
-      }
+        if (transformed.length > 500) transformed = transformed.slice(-500);
+        return { klines: transformed, indicators: indicators, source: source, available: available };
+  }
 
   // Client-side aggregation helper: aggregate transformed candles (objects with time in seconds)
   function aggregateTransformedToInterval(items, interval){
@@ -340,24 +357,20 @@
           } catch(e) {
             document.getElementById('raw').textContent = '[raw fetch exception] ' + e + '\n' + document.getElementById('raw').textContent;
           }
-          // server now returns { klines: [...], indicators: { sma20: [...], sma50: [...], vwap20: [...] } }
-          // since fetchKlines returns transformed candle array, but server also may return indicators in a separate field
-          // fetchKlines returned transformed candles; to get indicators we make a light call to /klines without compact to fetch indicators only
-          let indicators = {};
-          try {
-            // fetch indicators using the same limit used to populate the chart
-            const infoRes = await fetch(`/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${encodeURIComponent(displayLimit)}`);
-            if (infoRes.ok) {
-              const infoJson = await infoRes.json();
-              indicators = infoJson.indicators || {};
-            }
-          } catch(e) {}
-          let klines = res;
+          // server now returns { klines: [...], indicators: {...}, source:..., available: N }
+          let { klines: klinesArr, indicators: indicators, source: source, available: available } = await fetchKlines(symbol, interval, displayLimit, compact);
+          let klines = klinesArr;
+
+          // update UI info about source/available
+          try { document.getElementById('dataSource').textContent = `(source: ${source || 'unknown'})`; } catch(e){}
+          try { document.getElementById('availableCount').textContent = `(available: ${available || 0})`; } catch(e){}
+
           // If server returned fewer bars than requested for non-1m interval, try to fetch 1m and aggregate client-side to fill up to displayLimit
           try {
             if ((klines == null || klines.length < displayLimit) && interval !== '1m'){
               try {
-                const raw1m = await fetchKlines(symbol, '1m', 500, compact);
+                const raw1mResp = await fetchKlines(symbol, '1m', 500, compact);
+                const raw1m = raw1mResp.klines || [];
                 if (Array.isArray(raw1m) && raw1m.length){
                   const agg = aggregateTransformedToInterval(raw1m, interval);
                   if (agg && agg.length){

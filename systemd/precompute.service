@@ -1,0 +1,31 @@
+[Unit]
+Description=Precompute Kline Aggregates for crypto-trading
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/crypto-trading
+ExecStart=/usr/bin/env python3 %h/crypto-trading/scripts/precompute_aggregates.py
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=1800
+StandardOutput=append:%h/crypto-trading/logs/precompute.log
+StandardError=append:%h/crypto-trading/logs/precompute.log
+Nice=10
+
+[Unit]
+Description=Run precompute.service daily at 03:30
+After=network.target
+
+[Service]
+Type=simple
+# This is intended to be installed as a user service (systemctl --user). Do not set User= here.
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/home/crypto/crypto-trading
+ExecStart=/usr/bin/python3 /home/crypto/crypto-trading/scripts/precompute_aggregates.py --all
+TimeoutStartSec=1800
+# Redirect stdout/stderr to a user-writable path under ~/.config. The directory should be created by the deploy step.
+StandardOutput=append:%h/.config/crypto-trading/logs/precompute.log
+StandardError=append:%h/.config/crypto-trading/logs/precompute.log
+
+[Install]
+WantedBy=default.target

@@ -4,7 +4,7 @@ Precompute 30m/4h aggregates for all symbols using data/latest/<SYM>.json or arc
 Writes results to data/precomputed/<SYM>.json with keys '30m' and '4h' and indicators.
 Usage: scripts/precompute_aggregates.py --symbols BTCUSDT ETHUSDT
 """
-import os, json, argparse
+import os, json, argparse, subprocess
 from glob import glob
 BASE = os.path.dirname(os.path.dirname(__file__))
 LATEST_DIR = os.path.join(BASE, 'data', 'latest')
@@ -83,13 +83,65 @@ def process_symbol(sym):
         with open(path,'r') as f: j = json.load(f)
         raw = j.get('1m') or j.get('raw_1m')
     else:
-        # fallback to archive merge via build_latest_from_archive.py could be invoked, but skip for now
-        print('no latest for', sym); return
-    if not raw or len(raw)==0:
+        print('no latest for', sym)
+    # If raw is missing or too short to create reasonable 30m/4h aggregates, try to rebuild latest from archive
+    def ensure_raw_minimum(sym, raw):
+        if raw and len(raw) > 0:
+            return raw
+        # attempt to call build_latest_from_archive.py to create a fuller latest file
+        print('attempting to build latest from archive for', sym)
+        try:
+            # target at least 2000 raw 1m bars as a heuristic to cover coarse intervals
+            subprocess.run(['python3', 'scripts/build_latest_from_archive.py', '--symbol', sym, '--max', '2000'], check=True)
+            p = os.path.join(LATEST_DIR, sym + '.json')
+            if os.path.exists(p):
+                with open(p,'r') as f: jj = json.load(f)
+                return jj.get('1m') or jj.get('raw_1m')
+        except Exception as e:
+            print('build_latest_from_archive failed for', sym, e)
+        return raw
+
+    raw = ensure_raw_minimum(sym, raw)
+    if not raw or len(raw) == 0:
         print('no raw data for', sym); return
-    # aggregate
+    # compute aggregates
     agg30 = aggregate_to_interval(raw, '30m')
     agg4 = aggregate_to_interval(raw, '4h')
+
+    # If aggregates are too short for typical display limits (500), try to rebuild latest with deeper history
+    target_buckets = 500
+    need_rebuild = False
+    if len(agg30) < target_buckets:
+        need_rebuild = True
+        bars_per_30m = (30*60)//60
+        desired_raw_30 = max(2000, target_buckets * bars_per_30m + 512)
+    else:
+        desired_raw_30 = None
+    if len(agg4) < target_buckets:
+        need_rebuild = True
+        bars_per_4h = (4*60*60)//60
+        desired_raw_4 = max(2000, target_buckets * bars_per_4h + 512)
+    else:
+        desired_raw_4 = None
+
+    if need_rebuild:
+        # pick the larger desired raw count
+    desired_raw = max(x for x in [desired_raw_30 or 0, desired_raw_4 or 0, 2000])
+    # cap max to avoid excessive long-running rebuilds (e.g., don't ask for >200k bars)
+    desired_raw = min(desired_raw, 200000)
+        print(f'precompute: aggregates short for {sym} (30m={len(agg30)},4h={len(agg4)}), attempting rebuild with --max {desired_raw}')
+        try:
+            subprocess.run(['python3', 'scripts/build_latest_from_archive.py', '--symbol', sym, '--max', str(desired_raw)], check=True)
+            # reload raw and recompute
+            p = os.path.join(LATEST_DIR, sym + '.json')
+            if os.path.exists(p):
+                with open(p,'r') as f: jj = json.load(f)
+                raw = jj.get('1m') or jj.get('raw_1m')
+                if raw and len(raw)>0:
+                    agg30 = aggregate_to_interval(raw, '30m')
+                    agg4 = aggregate_to_interval(raw, '4h')
+        except Exception as e:
+            print('rebuild attempt failed for', sym, e)
     out = {'30m': agg30, '4h': agg4}
     out['indicators'] = {}
     out['indicators']['30m'] = compute_indicators_for_series(agg30)

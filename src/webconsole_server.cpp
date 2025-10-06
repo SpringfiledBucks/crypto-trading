@@ -300,7 +300,9 @@ void WebConsoleServer::run() {
                                     json prej = json::parse(pre_raw);
                                     if(prej.contains(interval) && prej[interval].is_array()){
                                         auto parr = prej[interval];
-                                        if((int)parr.size() >= limit){
+                                        // Accept precomputed result even if it is smaller than requested limit.
+                                        // Return available count so clients can decide to fetch 1m or aggregate locally.
+                                        if((int)parr.size() > 0){
                                             json indicators = prej.value("indicators", json::object());
                                             json out = json::object({{"symbol", symbol}, {"klines", parr}, {"indicators", indicators}, {"source", "precomputed"}, {"available", (int)parr.size()}});
                                             respond_text(out.dump(), "application/json", http::status::ok);
