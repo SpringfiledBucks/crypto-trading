@@ -6,11 +6,19 @@
     <!-- explicit favicon to avoid browser requesting root /favicon.ico unexpectedly -->
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
     <style>
+      :root{ --bg:#0b0b0b; --panel:#1a1a1a; --muted:#9aa; --accent:#7fc97f; }
       body { font-family: monospace; background:#111; color:#ddd; margin: 12px; }
-      .panel { display:inline-block; vertical-align: top; padding: 8px; margin-right: 12px; background:#1a1a1a; border-radius:6px; }
-      #raw { white-space: pre-wrap; max-height: 70vh; overflow: auto; padding: 8px; width: 60vw; display:inline-block; vertical-align: top; background:#0b0b0b; border-radius:6px; }
+      .panel { display:inline-block; vertical-align: top; padding: 8px; margin-right: 12px; background:var(--panel); border-radius:6px; }
+      #raw { white-space: pre-wrap; max-height: 70vh; overflow: auto; padding: 8px; width: 60vw; display:inline-block; vertical-align: top; background:var(--bg); border-radius:6px; }
       h3 { margin:0 0 8px 0 }
-      .small { color:#9aa; font-size: 0.9em }
+      .small { color:var(--muted); font-size: 0.9em }
+      /* responsive layout */
+      @media (max-width: 900px){
+        #chart{ width: 100% !important; height: 320px !important }
+        #raw{ width: 100% }
+        .panel{ display:block; width: 100%; margin-bottom:8px }
+      }
+      #availableWarning{ color: #ffd166; font-weight: bold; margin-left:12px; display:none }
     </style>
   </head>
   <body>
@@ -40,6 +48,7 @@
         <span id="currentIntervalDisplay" style="margin-left:8px;color:#9aa">(interval: 1m)</span>
   <span id="dataSource" style="margin-left:12px;color:#7fc97f">(source: -)</span>
   <span id="availableCount" style="margin-left:8px;color:#9aa">(available: -)</span>
+  <span id="availableWarning">(部分数据可用)</span>
         <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="compactKlines" /> 紧凑数据</label>
   <button id="reloadBtn">刷新 K 线</button>
   <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="scrollLock" /> 滚动锁定</label>
@@ -364,6 +373,10 @@
           // update UI info about source/available
           try { document.getElementById('dataSource').textContent = `(source: ${source || 'unknown'})`; } catch(e){}
           try { document.getElementById('availableCount').textContent = `(available: ${available || 0})`; } catch(e){}
+          try {
+            const warn = document.getElementById('availableWarning');
+            if(available && available < displayLimit){ warn.style.display = 'inline'; warn.textContent = `(注意：仅提供 ${available} / ${displayLimit} 个桶)`; } else { warn.style.display = 'none'; }
+          } catch(e){}
 
           // If server returned fewer bars than requested for non-1m interval, try to fetch 1m and aggregate client-side to fill up to displayLimit
           try {

@@ -13,7 +13,6 @@ add_executable(crypto_trading
   src/main.cpp
   src/http_client.cpp
   src/data_publisher.cpp
-  src/indicators.cpp
   src/webconsole_server.cpp
   src/trader.cpp
   src/console_ui.cpp
@@ -21,6 +20,11 @@ add_executable(crypto_trading
   src/order_manager.cpp
   src/binance_api.cpp
 )
+
+# Build indicators into a small static library so tools can reuse it
+add_library(indicators_lib STATIC src/indicators.cpp)
+target_include_directories(indicators_lib PRIVATE include)
+
 
 add_library(strategies_lib STATIC
   strategies/elliott_harmonic_fib.cpp
@@ -33,9 +37,9 @@ target_include_directories(crypto_trading PRIVATE include)
 
 if(CURSES_FOUND)
   target_include_directories(crypto_trading PRIVATE ${CURSES_INCLUDE_DIRS})
-  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${CURSES_LIBRARIES} ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto strategies_lib ZLIB::ZLIB)
+  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${CURSES_LIBRARIES} ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto strategies_lib ZLIB::ZLIB indicators_lib)
 else()
-  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto strategies_lib ZLIB::ZLIB)
+  target_link_libraries(crypto_trading PRIVATE CURL::libcurl Threads::Threads ${Boost_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto strategies_lib ZLIB::ZLIB indicators_lib)
 endif()
 
 # Install target
@@ -68,6 +72,10 @@ target_include_directories(proxy_traffic_monitor PRIVATE include)
 add_executable(klines_regression tools/klines_regression.cpp)
 target_include_directories(klines_regression PRIVATE include)
 target_link_libraries(klines_regression PRIVATE ${Boost_LIBRARIES})
+
+add_executable(precompute tools/precompute.cpp)
+target_link_libraries(precompute PRIVATE indicators_lib ${Boost_LIBRARIES})
+target_include_directories(precompute PRIVATE include)
 
 enable_testing()
 add_test(NAME smoke_klines_archive COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_klines_archive.sh)
