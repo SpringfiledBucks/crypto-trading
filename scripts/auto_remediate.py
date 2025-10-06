@@ -37,8 +37,9 @@ def remediate(symbols):
         except Exception as e:
             out[s]['error_ind'] = str(e)
         try:
-            subprocess.run(['python3','scripts/precompute_aggregates.py','--symbols',s], check=True)
-            out[s]['actions'].append('precompute_aggregates')
+            # use compiled C++ precompute tool
+            subprocess.run([os.path.join('build','precompute'), '--symbols', s], check=True)
+            out[s]['actions'].append('precompute_cpp')
         except Exception as e:
             out[s]['error_pre'] = str(e)
     return out
