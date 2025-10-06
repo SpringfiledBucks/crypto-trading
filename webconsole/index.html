@@ -37,6 +37,7 @@
           <option value="30m">30 分钟</option>
           <option value="4h">4 小时</option>
         </select>
+        <span id="currentIntervalDisplay" style="margin-left:8px;color:#9aa">(interval: 1m)</span>
         <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="compactKlines" /> 紧凑数据</label>
   <button id="reloadBtn">刷新 K 线</button>
   <label style="margin-left:8px; font-size:0.9em;"><input type="checkbox" id="scrollLock" /> 滚动锁定</label>
@@ -99,15 +100,102 @@
         if (!Array.isArray(arr)) throw new Error('Invalid klines payload');
         // transform and ensure at most 500 bars
     // support two formats: full binance array or compact object {time,open,high,low,close,volume}
-    const transformed = arr.map(c => {
+    let transformed = arr.map(c => {
       if (Array.isArray(c)) return ({ time: isoToTime(c[0]), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]) });
       return ({ time: Number(c.time), open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume) });
     });
-        if (transformed.length > 500) return transformed.slice(-500);
-        return transformed;
+
+    // if server returned finer-grained data than requested (e.g. returned 1m for a 30m request),
+    // aggregate client-side as a fallback.
+    const mapping = { '1m': 60, '30m': 60*30, '4h': 60*60*4 };
+    try {
+      if (interval in mapping && transformed.length >= 2) {
+        const delta = transformed[1].time - transformed[0].time;
+        const reqBucket = mapping[interval];
+        if (delta < reqBucket) {
+          // aggregate into buckets of reqBucket seconds
+          const groups = new Map();
+          for (const d of transformed) {
+            const bucket = Math.floor(d.time / reqBucket) * reqBucket;
+            if (!groups.has(bucket)) {
+              groups.set(bucket, { time: bucket, open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume });
+            } else {
+              const g = groups.get(bucket);
+              g.high = Math.max(g.high, d.high);
+              g.low = Math.min(g.low, d.low);
+              g.close = d.close;
+              g.volume = g.volume + d.volume;
+            }
+          }
+          const agg = Array.from(groups.values()).sort((a,b)=>a.time-b.time);
+          transformed = agg;
+        }
+      }
+    } catch(e) { console.warn('client-side aggregation failed', e); }
+
+    if (transformed.length > 500) return transformed.slice(-500);
+    return transformed;
       }
 
+  // Client-side aggregation helper: aggregate transformed candles (objects with time in seconds)
+  function aggregateTransformedToInterval(items, interval){
+    const mapping = { '1m': 60, '30m': 60*30, '4h': 60*60*4 };
+    if(!(interval in mapping)) return items;
+    const bucketS = mapping[interval];
+    const groups = new Map();
+    for(const d of items){
+      const bucket = Math.floor(d.time / bucketS) * bucketS;
+      if(!groups.has(bucket)) groups.set(bucket, { time: bucket, open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume });
+      else {
+        const g = groups.get(bucket);
+        g.high = Math.max(g.high, d.high);
+        g.low = Math.min(g.low, d.low);
+        g.close = d.close;
+        g.volume = g.volume + d.volume;
+      }
+    }
+    return Array.from(groups.values()).sort((a,b)=>a.time-b.time);
+  }
+
+  // Simple client-side indicators (SMA and VWAP) over transformed data
+  function computeSMAFromTransformed(items, window){
+    const res = [];
+    const q = [];
+    let s = 0;
+    for(let i=0;i<items.length;i++){
+      const close = Number(items[i].close) || 0;
+      q.push(close); s += close;
+      if(q.length > window){ s -= q.shift(); }
+      if(q.length === window) res.push([items[i].time, s / window]);
+      else res.push(null);
+    }
+    return res;
+  }
+
+  function computeVWAPFromTransformed(items, window){
+    const res = [];
+    const pv = [], vol = [];
+    for(let i=0;i<items.length;i++){
+      const typical = ((Number(items[i].high)||0) + (Number(items[i].low)||0) + (Number(items[i].close)||0)) / 3.0;
+      const v = Number(items[i].volume) || 0;
+      pv.push(typical * v); vol.push(v);
+      if(pv.length > window){ pv.shift(); vol.shift(); }
+      if(pv.length === window){ const sPv = pv.reduce((a,b)=>a+b,0); const sVol = vol.reduce((a,b)=>a+b,0); res.push([items[i].time, sVol>0 ? sPv / sVol : null]); }
+      else res.push(null);
+    }
+    return res;
+  }
+
       function createChart(data, levels) {
+        // preserve visible range if scrollLock enabled so reloads don't force latest view
+        let preservedVisibleRange = null;
+        try {
+          if (chart && scrollLocked && typeof chart.timeScale === 'function'){
+            try { if (chart.timeScale().getVisibleRange) preservedVisibleRange = chart.timeScale().getVisibleRange();
+                  else if (chart.getVisibleLogicalRange) preservedVisibleRange = chart.getVisibleLogicalRange();
+            } catch(e){ preservedVisibleRange = null; }
+          }
+        } catch(e){}
         if (chart) {
           try { chart.remove(); } catch(e){}
         }
@@ -160,6 +248,15 @@
         // prepare candlestick data without volume for candlestick series
         const candleData = (data || []).map(d => ({ time: d.time, open: d.open, high: d.high, low: d.low, close: d.close }));
         candleSeries.setData(candleData);
+        // try to restore preserved visible range when scroll lock is on
+        try {
+          if (scrollLocked && preservedVisibleRange){
+            try {
+              if (chart && typeof chart.timeScale === 'function' && chart.timeScale().setVisibleRange) chart.timeScale().setVisibleRange(preservedVisibleRange);
+              else if (chart && typeof chart.setVisibleLogicalRange === 'function') chart.setVisibleLogicalRange(preservedVisibleRange);
+            } catch(e){ /* best-effort */ }
+          }
+        } catch(e){}
 
         // volume histogram below
         const volumeSeries = addSeriesCompat(chart, 'histogram', {
@@ -255,7 +352,31 @@
               indicators = infoJson.indicators || {};
             }
           } catch(e) {}
-          const klines = res;
+          let klines = res;
+          // If server returned fewer bars than requested for non-1m interval, try to fetch 1m and aggregate client-side to fill up to displayLimit
+          try {
+            if ((klines == null || klines.length < displayLimit) && interval !== '1m'){
+              try {
+                const raw1m = await fetchKlines(symbol, '1m', 500, compact);
+                if (Array.isArray(raw1m) && raw1m.length){
+                  const agg = aggregateTransformedToInterval(raw1m, interval);
+                  if (agg && agg.length){
+                    klines = agg.slice(-displayLimit);
+                    // if server didn't provide indicators, compute simple ones client-side
+                    if(!indicators || Object.keys(indicators).length===0){
+                      indicators = {};
+                      const sma20 = computeSMAFromTransformed(klines, 20).map(x=>x? [x[0], x[1]]: null).filter(x=>x);
+                      const sma50 = computeSMAFromTransformed(klines, 50).map(x=>x? [x[0], x[1]]: null).filter(x=>x);
+                      const vwap20 = computeVWAPFromTransformed(klines, 20).map(x=>x? [x[0], x[1]]: null).filter(x=>x);
+                      indicators.sma20 = sma20;
+                      indicators.sma50 = sma50;
+                      indicators.vwap20 = vwap20;
+                    }
+                  }
+                }
+              } catch(e){}
+            }
+          } catch(e){}
           const levels = loadLevelsForSymbol(symbol);
           const handles = createChart(klines, levels);
           // map indicator arrays (expected [ [ts_seconds, value], ... ])
@@ -266,10 +387,11 @@
             activeSeriesHandles = handles;
             // 如果没有锁定滚动，尝试将时间轴滚回实时（兼容不同 lwc 版本）
             try {
-              if (!scrollLocked && chart && typeof chart.timeScale === 'function') {
-                const ts = chart.timeScale();
-                if (ts && typeof ts.scrollToRealTime === 'function') ts.scrollToRealTime();
-                // for older API that provides scrollToRealTime on chart directly
+              if (!scrollLocked && chart) {
+                if (typeof chart.timeScale === 'function') {
+                  const ts = chart.timeScale();
+                  if (ts && typeof ts.scrollToRealTime === 'function') ts.scrollToRealTime();
+                }
                 if (chart && typeof chart.scrollToRealTime === 'function') chart.scrollToRealTime();
               }
             } catch(e) {}
@@ -364,9 +486,9 @@
       }
 
       // UI bindings
-  document.getElementById('reloadBtn').onclick = ()=>{ const sym=document.getElementById('symbolSelect').value || currentSymbol; currentSymbol=sym; currentInterval = document.getElementById('intervalSelect').value || currentInterval; loadAndRender(sym); renderLevelsList(sym); window.startAutoReload && window.startAutoReload(); };
-  document.getElementById('symbolSelect').onchange = (ev)=>{ currentSymbol = ev.target.value; currentInterval = document.getElementById('intervalSelect').value || currentInterval; loadAndRender(currentSymbol); renderLevelsList(currentSymbol); window.startAutoReload && window.startAutoReload(); };
-  document.getElementById('intervalSelect').onchange = (ev)=>{ currentInterval = ev.target.value || currentInterval; loadAndRender(currentSymbol); window.startAutoReload && window.startAutoReload(); };
+  document.getElementById('reloadBtn').onclick = ()=>{ const sym=document.getElementById('symbolSelect').value || currentSymbol; currentSymbol=sym; currentInterval = document.getElementById('intervalSelect').value || currentInterval; console.debug('reloadBtn clicked - symbol=', sym, 'interval=', currentInterval); document.getElementById('currentIntervalDisplay').textContent = '(interval: '+currentInterval+')'; loadAndRender(sym); renderLevelsList(sym); window.startAutoReload && window.startAutoReload(); };
+  document.getElementById('symbolSelect').onchange = (ev)=>{ currentSymbol = ev.target.value; currentInterval = document.getElementById('intervalSelect').value || currentInterval; console.debug('symbolSelect changed - symbol=', currentSymbol, 'interval=', currentInterval); document.getElementById('currentIntervalDisplay').textContent = '(interval: '+currentInterval+')'; loadAndRender(currentSymbol); renderLevelsList(currentSymbol); window.startAutoReload && window.startAutoReload(); };
+  document.getElementById('intervalSelect').onchange = (ev)=>{ currentInterval = ev.target.value || currentInterval; console.debug('intervalSelect changed - interval=', currentInterval); document.getElementById('currentIntervalDisplay').textContent = '(interval: '+currentInterval+')'; loadAndRender(currentSymbol); window.startAutoReload && window.startAutoReload(); };
   document.getElementById('scrollLock').onchange = (ev)=>{ scrollLocked = !!ev.target.checked; };
       document.getElementById('addLevel').onclick = ()=>{
         const p = document.getElementById('levelPrice').value;

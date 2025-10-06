@@ -115,6 +115,7 @@ errors = {}
 parser = argparse.ArgumentParser()
 parser.add_argument('--sample', action='store_true', help='do a sample run (limit=5)')
 parser.add_argument('--dry-run', action='store_true', help='don\'t write files, just simulate')
+parser.add_argument('--outdir', help='override output directory (default data/latest)')
 parser.add_argument('--symbols', nargs='*', help='optional list of symbols to refresh')
 args = parser.parse_args()
 
@@ -124,6 +125,11 @@ if args.symbols:
 if args.sample:
     LIMIT = 5
     print('Running in sample mode: LIMIT=5')
+
+if args.outdir:
+    OUTDIR = os.path.abspath(os.path.join(BASE, args.outdir)) if not os.path.isabs(args.outdir) else args.outdir
+    os.makedirs(OUTDIR, exist_ok=True)
+    print('Overriding output dir to', OUTDIR)
 
 # Try to get exchangeInfo and init token bucket
 ei = fetch_exchange_info()

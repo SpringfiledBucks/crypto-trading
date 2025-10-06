@@ -1,0 +1,10 @@
+[Unit]
+Description=Precompute Kline Aggregates (30m/4h)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 /home/crypto/crypto-trading/scripts/precompute_aggregates.py --symbols BTCUSDT
+WorkingDirectory=/home/crypto/crypto-trading
+
+[Install]
+WantedBy=default.target

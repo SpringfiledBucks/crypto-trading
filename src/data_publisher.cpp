@@ -175,9 +175,42 @@ void DataPublisher::run_loop() {
                     out["indicators"]["4h"]["sma50"] = indicators::compute_sma(out["4h"].get<std::vector<json>>(), 50);
                     out["indicators"]["4h"]["vwap20"] = indicators::compute_vwap(out["4h"].get<std::vector<json>>(), 20);
 
-                    // write to disk atomically
+                    // write to disk atomically, but avoid overwriting a larger/more recent file with a smaller/older one
                     fs::path dst = outdir / (sym + std::string(".json"));
-                    atomic_write_file(dst, out.dump());
+                    try {
+                        bool do_write = true;
+                        if(fs::exists(dst)){
+                            try{
+                                std::ifstream ifs(dst);
+                                if(ifs){
+                                    json existing; ifs >> existing;
+                                    int existing_n = 0; int64_t existing_last = 0;
+                                    if(existing.contains("raw_1m") && existing["raw_1m"].is_array()){
+                                        existing_n = (int)existing["raw_1m"].size();
+                                        if(existing_n>0) existing_last = (int64_t)existing["raw_1m"].back()[0];
+                                    } else if(existing.contains("1m") && existing["1m"].is_array()){
+                                        existing_n = (int)existing["1m"].size();
+                                        if(existing_n>0) existing_last = (int64_t)existing["1m"].back()[0];
+                                    }
+                                    int new_n = 0; int64_t new_last = 0;
+                                    if(out.contains("raw_1m") && out["raw_1m"].is_array()){
+                                        new_n = (int)out["raw_1m"].size();
+                                        if(new_n>0) new_last = (int64_t)out["raw_1m"].back()[0];
+                                    } else if(out.contains("1m") && out["1m"].is_array()){
+                                        new_n = (int)out["1m"].size();
+                                        if(new_n>0) new_last = (int64_t)out["1m"].back()[0];
+                                    }
+                                    // If the existing file has more bars and is at least as recent, skip write
+                                    if(existing_n > 0 && existing_n >= new_n && existing_last >= new_last){
+                                        do_write = false;
+                                        std::ostringstream ss; ss << "DataPublisher: skip writing " << dst.string() << " (existing bars=" << existing_n << " last=" << existing_last << ") vs new bars=" << new_n << " last=" << new_last;
+                                        Logger::info(ss.str());
+                                    }
+                                }
+                            } catch(...) { /* ignore parse errors and allow write */ }
+                        }
+                        if(do_write){ atomic_write_file(dst, out.dump()); }
+                    } catch(...) { /* ignore write errors */ }
 
                     // write indicators separately
                     try {

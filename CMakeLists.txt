@@ -65,6 +65,10 @@ add_executable(proxy_traffic_monitor tools/proxy_traffic_monitor.cpp)
 target_link_libraries(proxy_traffic_monitor PRIVATE ${Boost_LIBRARIES})
 target_include_directories(proxy_traffic_monitor PRIVATE include)
 
+add_executable(klines_regression tools/klines_regression.cpp)
+target_include_directories(klines_regression PRIVATE include)
+target_link_libraries(klines_regression PRIVATE ${Boost_LIBRARIES})
+
 enable_testing()
 add_test(NAME smoke_klines_archive COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_klines_archive.sh)
 
