@@ -88,6 +88,10 @@ void DataPublisher::run_loop() {
     fs::create_directories(outdir);
     fs::path indicators_dir = fs::path("data") / "indicators";
     fs::create_directories(indicators_dir);
+    // write short-lived price snapshots to a separate dir to avoid colliding with
+    // full `data/latest/<SYMBOL>.json` files which are authoritative for precompute
+    fs::path price_snapshots_dir = fs::path("data") / "latest" / "price_snapshots";
+    fs::create_directories(price_snapshots_dir);
 
     if(symbols.empty()) {
         Logger::warn("DataPublisher: no symbols configured, exiting publisher loop");
@@ -238,8 +242,10 @@ void DataPublisher::run_loop() {
                             latest["event_time"] = data.value("E", json());
                             latest["price"] = data.value("p", json());
                             latest_map[sym] = latest;
-                            // write latest small file
-                            fs::path ldst = outdir / (sym + std::string(".latest.json"));
+                            // write latest small price snapshot into a separate directory so it
+                            // doesn't accidentally get treated as a full-symbol file by tools
+                            // (we intentionally do NOT write to data/latest/<SYM>.json here)
+                            fs::path ldst = price_snapshots_dir / (sym + std::string(".json"));
                             atomic_write_file(ldst, latest.dump());
                         }
                     } catch(...) {}
