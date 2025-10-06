@@ -367,7 +367,11 @@
 
           // If server returned fewer bars than requested for non-1m interval, try to fetch 1m and aggregate client-side to fill up to displayLimit
           try {
-            if ((klines == null || klines.length < displayLimit) && interval !== '1m'){
+            // Only attempt client-side aggregation from 1m when server returned no klines.
+            // Previously we aggregated whenever server returned fewer than displayLimit which
+            // caused valid server-provided coarse intervals (e.g. 4h with available=393)
+            // to be replaced by aggregating the last 500 1m bars (resulting in ~3 4h bars).
+            if ((klines == null || klines.length === 0) && interval !== '1m'){
               try {
                 const raw1mResp = await fetchKlines(symbol, '1m', 500, compact);
                 const raw1m = raw1mResp.klines || [];
