@@ -126,9 +126,9 @@ def process_symbol(sym):
 
     if need_rebuild:
         # pick the larger desired raw count
-    desired_raw = max(x for x in [desired_raw_30 or 0, desired_raw_4 or 0, 2000])
-    # cap max to avoid excessive long-running rebuilds (e.g., don't ask for >200k bars)
-    desired_raw = min(desired_raw, 200000)
+        desired_raw = max(x for x in [desired_raw_30 or 0, desired_raw_4 or 0, 2000])
+        # cap max to avoid excessive long-running rebuilds (e.g., don't ask for >200k bars)
+        desired_raw = min(desired_raw, 200000)
         print(f'precompute: aggregates short for {sym} (30m={len(agg30)},4h={len(agg4)}), attempting rebuild with --max {desired_raw}')
         try:
             subprocess.run(['python3', 'scripts/build_latest_from_archive.py', '--symbol', sym, '--max', str(desired_raw)], check=True)
