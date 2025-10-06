@@ -6,6 +6,7 @@
 #include <boost/asio/strand.hpp>
 #include <boost/asio/signal_set.hpp>
 #include "logger.h"
+#include "indicators.h"
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <fstream>
@@ -21,6 +22,11 @@ using tcp = boost::asio::ip::tcp;
 namespace http = boost::beast::http;
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+
+// Simple in-memory aggregation cache to speed repeated requests
+struct AggCacheEntry { json payload; std::chrono::steady_clock::time_point ts; };
+static std::mutex agg_cache_mutex;
+static std::unordered_map<std::string, AggCacheEntry> agg_cache;
 
 WebConsoleServer::WebConsoleServer(unsigned short port, const std::string &wwwroot): port_(port), wwwroot_(wwwroot) {}
 WebConsoleServer::~WebConsoleServer() { stop(); }
@@ -278,10 +284,230 @@ void WebConsoleServer::run() {
                                 indicators = json::object({{"sma20", sma20}, {"sma50", sma50}, {"vwap20", vwap20}});
                             }
 
-                            json out = json::object({{"symbol", symbol}, {"klines", outarr}, {"indicators", indicators}});
+                            json out = json::object({{"symbol", symbol}, {"klines", outarr}, {"indicators", indicators}, {"source", "archive.range"}, {"available", (int)outarr.size()}});
                             respond_text(out.dump(), "application/json", http::status::ok);
                             s.shutdown(tcp::socket::shutdown_send);
                             return;
+                        }
+
+                        // attempt: if client omitted start/end, try to serve recent data by merging archive months
+                        // First, check if a precomputed aggregate exists for this symbol/interval
+                        try {
+                            fs::path precomputed = fs::path("data") / "precomputed" / (symbol + std::string(".json"));
+                            if(fs::exists(precomputed)){
+                                try{
+                                    auto pre_raw = load_file(precomputed);
+                                    json prej = json::parse(pre_raw);
+                                    if(prej.contains(interval) && prej[interval].is_array()){
+                                        auto parr = prej[interval];
+                                        if((int)parr.size() >= limit){
+                                            json indicators = prej.value("indicators", json::object());
+                                            json out = json::object({{"symbol", symbol}, {"klines", parr}, {"indicators", indicators}, {"source", "precomputed"}, {"available", (int)parr.size()}});
+                                            respond_text(out.dump(), "application/json", http::status::ok);
+                                            s.shutdown(tcp::socket::shutdown_send);
+                                            return;
+                                        }
+                                    }
+                                } catch(...){}
+                            }
+                        } catch(...){}
+                        // collect months present in archive/klines/<symbol> sorted descending and accumulate entries until limit reached
+                        try {
+                            fs::path arch = fs::path("archive") / "klines" / symbol;
+                            std::vector<json> collected;
+                            if(fs::exists(arch) && fs::is_directory(arch)){
+                                // list month files YYYY-MM.json.gz
+                                std::vector<std::string> months;
+                                for(auto &p: fs::directory_iterator(arch)){
+                                    auto name = p.path().filename().string();
+                                    if(name.size() >= 12 && name.substr(name.size()-8) == ".json.gz"){
+                                        months.push_back(name.substr(0, name.size()-8));
+                                    }
+                                }
+                                // sort descending (newest first)
+                                std::sort(months.begin(), months.end(), std::greater<std::string>());
+                                // determine how many raw 1m bars we should aim to collect before aggregating
+                                int raw_needed = limit * 2;
+                                if(interval != "1m"){
+                                    std::map<std::string,int> mapping{{"1m",60},{"30m",60*30},{"4h",60*60*4}};
+                                    auto itmap = mapping.find(interval);
+                                    if(itmap != mapping.end()){
+                                        int bucket_s = itmap->second;
+                                        // number of 1m bars per bucket = bucket_s / 60
+                                        int bars_per_bucket = bucket_s / 60;
+                                        // we need roughly limit * bars_per_bucket 1m bars to produce `limit` aggregated bars
+                                        raw_needed = limit * bars_per_bucket;
+                                        // add much more slack so we read extra 1m bars from archive months
+                                        // this helps produce enough aggregated buckets for coarse intervals
+                                        raw_needed += 1024;
+                                    }
+                                }
+                                for(auto &m: months){
+                                    fs::path path = arch / (m + ".json.gz");
+                                    if(!fs::exists(path)) continue;
+                                    auto raw = load_gz_file(path);
+                                    if(raw.empty()) continue;
+                                    try{
+                                        json arr = json::parse(raw);
+                                        if(arr.is_array()){
+                                            // append month's entries to collected (we will later trim to the most recent limit)
+                                            for(size_t i=0;i<arr.size();++i) collected.push_back(arr[i]);
+                                        }
+                                    } catch(...) { continue; }
+                                    // continue reading all available months (we will trim later to the recent window)
+                                }
+                                // sort collected by timestamp ascending (oldest first)
+                                std::sort(collected.begin(), collected.end(), [](const json &a, const json &b){ return (int64_t)a[0] < (int64_t)b[0]; });
+                                // Trim collected to the appropriate recent window:
+                                // - if client requested 1m, keep up to `limit` most-recent 1m bars
+                                // - if client requested a coarser interval, keep up to `raw_needed` most-recent 1m bars
+                                if((int)collected.size() > 0){
+                                    if(interval == "1m"){
+                                        if((int)collected.size() > limit){
+                                            std::vector<json> tmp;
+                                            int start_idx = (int)collected.size() - limit;
+                                            for(int i=start_idx;i<(int)collected.size();++i) tmp.push_back(collected[i]);
+                                            collected = std::move(tmp);
+                                        }
+                                    } else {
+                                        if((int)collected.size() > raw_needed){
+                                            std::vector<json> tmp;
+                                            int start_idx = (int)collected.size() - raw_needed;
+                                            for(int i=start_idx;i<(int)collected.size();++i) tmp.push_back(collected[i]);
+                                            collected = std::move(tmp);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if(!collected.empty()){
+                                // prepare indicators: try to reuse existing per-month indicator cache mapping similar to archive branch above
+                                int n = (int)collected.size();
+                                std::vector<int64_t> ts_list(n);
+                                std::unordered_map<int64_t,int> ts_to_idx;
+                                for(int i=0;i<n;++i){ ts_list[i] = (int64_t)collected[i][0]; ts_to_idx[ts_list[i]] = i; }
+
+                                std::vector<json> sma20_parts(n, nullptr), sma50_parts(n, nullptr), vwap20_parts(n, nullptr);
+                                bool all_present = true;
+                                // iterate months (ascending) to map indicators
+                                for(auto &m: std::vector<std::string>()){} // placeholder to keep structure
+                                // reuse months list from above (compute months_between from earliest to latest of collected)
+                                if((int)collected.size()>0){
+                                    int64_t first_ts = (int64_t)collected.front()[0];
+                                    int64_t last_ts = (int64_t)collected.back()[0];
+                                    std::tm tm1{}, tm2{};
+                                    time_t tsec1 = (time_t)(first_ts/1000);
+                                    time_t tsec2 = (time_t)(last_ts/1000);
+                                    gmtime_r(&tsec1, &tm1);
+                                    gmtime_r(&tsec2, &tm2);
+                                    auto months = months_between(tm1.tm_year + 1900, tm1.tm_mon + 1, tm2.tm_year + 1900, tm2.tm_mon + 1);
+                                    for(auto &m: months){
+                                        fs::path indp = fs::path("archive") / "klines" / symbol / (m + ".ind.json.gz");
+                                        fs::path rawp = fs::path("archive") / "klines" / symbol / (m + ".json.gz");
+                                        if(!fs::exists(indp) || !fs::exists(rawp)) { all_present = false; break; }
+                                        try{
+                                            std::string indraw = load_gz_file(indp);
+                                            json indj = json::parse(indraw);
+                                            std::string raw = load_gz_file(rawp);
+                                            json arrm = json::parse(raw);
+                                            for(size_t i=0;i<arrm.size();++i){ int64_t ts = (int64_t)arrm[i][0]; auto it = ts_to_idx.find(ts); if(it!=ts_to_idx.end()){
+                                                        int dst = it->second;
+                                                        if(indj.contains("sma20") && indj["sma20"].is_array() && (int)indj["sma20"].size() > (int)i) sma20_parts[dst] = indj["sma20"][i];
+                                                        if(indj.contains("sma50") && indj["sma50"].is_array() && (int)indj["sma50"].size() > (int)i) sma50_parts[dst] = indj["sma50"][i];
+                                                        if(indj.contains("vwap20") && indj["vwap20"].is_array() && (int)indj["vwap20"].size() > (int)i) vwap20_parts[dst] = indj["vwap20"][i];
+                                                }
+                                            }
+                                        } catch(...) { all_present = false; break; }
+                                    }
+                                }
+
+                                json indicators;
+                                if(all_present){
+                                    bool missing = false;
+                                    for(int i=0;i<n;++i){ if(sma20_parts[i].is_null() && sma50_parts[i].is_null() && vwap20_parts[i].is_null()){ missing = true; break; } }
+                                    if(!missing){ json s20 = json::array(); json s50 = json::array(); json v20 = json::array(); for(int i=0;i<n;++i){ s20.push_back(sma20_parts[i]); s50.push_back(sma50_parts[i]); v20.push_back(vwap20_parts[i]); } indicators = json::object({{"sma20", s20}, {"sma50", s50}, {"vwap20", v20}}); this->cache_hits_.fetch_add(1); Logger::info(std::string("/klines archive-cache-hit for ")+symbol+" out_count="+std::to_string(n)); }
+                                }
+                                if(indicators.empty()){
+                                    // fallback compute
+                                    this->cache_misses_.fetch_add(1);
+                                    int n2 = n;
+                                    std::vector<double> closes(n2,0.0), vols(n2,0.0);
+                                    for(int i=0;i<n2;++i){ try{ closes[i] = std::stod(collected[i][4].get<std::string>()); vols[i] = std::stod(collected[i][5].get<std::string>()); } catch(...) { closes[i]=0.0; vols[i]=0.0; } }
+                                    auto rolling_sma = [&](const std::vector<double> &vals, int window){ json arr = json::array(); if((int)vals.size()==0) return arr; std::vector<double> pref(vals.size()+1, 0.0); for(size_t i=0;i<vals.size();++i) pref[i+1] = pref[i] + vals[i]; for(size_t i=0;i<vals.size();++i){ if((int)i >= window-1){ double s = pref[i+1] - pref[i+1-window]; arr.push_back(s / window); } else arr.push_back(nullptr); } return arr; };
+                                    auto rolling_vwap = [&](const std::vector<double> &cl, const std::vector<double> &vl, int window){ json arr = json::array(); if((int)cl.size()==0) return arr; std::vector<double> tp(cl.size(), 0.0); for(size_t i=0;i<cl.size();++i) tp[i] = cl[i] * vl[i]; std::vector<double> pref_num(tp.size()+1, 0.0), pref_den(tp.size()+1, 0.0); for(size_t i=0;i<tp.size();++i){ pref_num[i+1] = pref_num[i] + tp[i]; pref_den[i+1] = pref_den[i] + vl[i]; } for(size_t i=0;i<tp.size();++i){ if((int)i >= window-1){ double num = pref_num[i+1] - pref_num[i+1-window]; double den = pref_den[i+1] - pref_den[i+1-window]; if(den!=0) arr.push_back(num/den); else arr.push_back(nullptr); } else arr.push_back(nullptr); } return arr; };
+                                    json sma20 = rolling_sma(closes, 20);
+                                    json sma50 = rolling_sma(closes, 50);
+                                    json vwap20 = rolling_vwap(closes, vols, 20);
+                                    indicators = json::object({{"sma20", sma20}, {"sma50", sma50}, {"vwap20", vwap20}});
+                                }
+
+                                // prepare final klines array for client; if client requested a non-1m interval
+                                // and collected appears to be raw 1m bars, aggregate to the requested interval
+                                json arr_for_client = json::array();
+                                try {
+                                    if(interval != "1m"){
+                                        // convert to vector<json> and aggregate
+                                        std::vector<json> raw_vec;
+                                        for(auto &it: collected) raw_vec.push_back(it);
+                                        auto agg = indicators::aggregate_to_interval_no_fmt(raw_vec, interval);
+                                        for(auto &it: agg) arr_for_client.push_back(it);
+                                        // recompute indicators from aggregated data
+                                        json ns20 = json::array(); json ns50 = json::array(); json nv20 = json::array();
+                                        auto s20 = indicators::compute_sma(agg, 20);
+                                        auto s50 = indicators::compute_sma(agg, 50);
+                                        auto v20 = indicators::compute_vwap(agg, 20);
+                                        for(auto &x: s20) ns20.push_back(x);
+                                        for(auto &x: s50) ns50.push_back(x);
+                                        for(auto &x: v20) nv20.push_back(x);
+                                        indicators = json::object({{"sma20", ns20}, {"sma50", ns50}, {"vwap20", nv20}});
+                                    } else {
+                                        for(auto &it: collected) arr_for_client.push_back(it);
+                                    }
+                                } catch(...) {
+                                    for(auto &it: collected) arr_for_client.push_back(it);
+                                }
+
+                                // If archive aggregation produced fewer than `limit` buckets,
+                                // prefer it unless data/latest can provide more aggregated buckets.
+                                if((int)arr_for_client.size() < limit){
+                                    int archive_count = (int)arr_for_client.size();
+                                    int latest_count = 0;
+                                    try{
+                                        fs::path latestp = fs::path("data") / "latest" / (symbol + ".json");
+                                        if(fs::exists(latestp)){
+                                            auto latest_raw = load_file(latestp);
+                                            json lj = json::parse(latest_raw);
+                                            json src = lj.value("1m", lj.value("raw_1m", json::array()));
+                                            if(src.is_array() && !src.empty()){
+                                                std::vector<json> raw_vec;
+                                                for(auto &it: src) raw_vec.push_back(it);
+                                                auto la = indicators::aggregate_to_interval_no_fmt(raw_vec, interval);
+                                                latest_count = (int)la.size();
+                                            }
+                                        }
+                                    } catch(...) { latest_count = 0; }
+
+                                    if(latest_count > archive_count){
+                                        Logger::info(std::string("HTTP /klines (archive-merge) insufficient for ")+symbol+" have="+std::to_string(archive_count)+" need="+std::to_string(limit)+" - falling through to data/latest (latest_count="+std::to_string(latest_count)+")");
+                                        // fallthrough to data/latest
+                                    } else {
+                                        // return archive aggregated result even if smaller than limit
+                                        json out = json::object({{"symbol", symbol}, {"klines", arr_for_client}, {"indicators", indicators}, {"source", "archive.merge"}, {"available", (int)arr_for_client.size()}});
+                                        respond_text(out.dump(), "application/json", http::status::ok);
+                                        Logger::info(std::string("HTTP /klines (archive-merge) response for ")+symbol+" size="+std::to_string(out.dump().size())+" (archive_count="+std::to_string(archive_count)+")");
+                                        s.shutdown(tcp::socket::shutdown_send);
+                                        return;
+                                    }
+                                } else {
+                                    json out = json::object({{"symbol", symbol}, {"klines", arr_for_client}, {"indicators", indicators}, {"source", "archive.merge"}, {"available", (int)arr_for_client.size()}});
+                                    respond_text(out.dump(), "application/json", http::status::ok);
+                                    Logger::info(std::string("HTTP /klines (archive-merge) response for ")+symbol+" size="+std::to_string(out.dump().size()));
+                                    s.shutdown(tcp::socket::shutdown_send);
+                                    return;
+                                }
+                            }
+                        } catch(...) {
+                            // fallthrough to data/latest fallback below
                         }
 
                         // fallback: serve data/latest as before
@@ -291,11 +517,109 @@ void WebConsoleServer::run() {
                         try {
                             auto raw = load_file(fp);
                             json j = json::parse(raw);
-                            // choose interval array or fallback
+                            // choose interval array or fallback: prefer the requested interval, else fall back to available 1m/raw_1m
                             std::string key = interval;
-                            if(!j.contains(key) && interval=="1m" && j.contains("raw_1m")) key = "raw_1m";
+                            if(!j.contains(key)){
+                                if(j.contains("1m")) key = "1m";
+                                else if(j.contains("raw_1m")) key = "raw_1m";
+                            }
                             json arr = j.value(key, json::array());
                             if(!arr.is_array()) arr = json::array();
+                            // if the requested interval isn't present or precomputed array is too short,
+                            // try to aggregate from 1m/raw_1m source when available
+                            if(interval != "1m"){
+                                bool need_aggregate = false;
+                                if(!j.contains(interval)) need_aggregate = true;
+                                else {
+                                    try { if((int)arr.size() < limit) need_aggregate = true; } catch(...) { need_aggregate = true; }
+                                }
+                                if(need_aggregate){
+                                    try {
+                                        // Build a cache key
+                                        std::string cache_key = symbol + "|" + interval + "|" + std::to_string(limit);
+                                        {
+                                            std::lock_guard<std::mutex> g(agg_cache_mutex);
+                                            auto it = agg_cache.find(cache_key);
+                                            if(it != agg_cache.end()){
+                                                // 30s TTL
+                                                auto age = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - it->second.ts).count();
+                                                if(age < 30){
+                                                    try { respond_text(it->second.payload.dump(), "application/json", http::status::ok); s.shutdown(tcp::socket::shutdown_send); return; } catch(...){}
+                                                } else {
+                                                    agg_cache.erase(it);
+                                                }
+                                            }
+                                        }
+
+                                        json src = j.value("1m", j.value("raw_1m", json::array()));
+                                        if(src.is_array() && !src.empty()){
+                                            // Find the longest continuous tail segment (no gaps) from src's end going backwards
+                                            std::vector<json> tail;
+                                            int64_t prev_ts = -1;
+                                            for(int i = (int)src.size() - 1; i >= 0; --i){
+                                                try{
+                                                    int64_t ts = (int64_t)src[i][0];
+                                                    if(prev_ts == -1){ tail.push_back(src[i]); prev_ts = ts; }
+                                                    else {
+                                                        if(prev_ts - ts == 60000){ // exactly 60s gap
+                                                            tail.push_back(src[i]); prev_ts = ts;
+                                                        } else break; // gap detected
+                                                    }
+                                                } catch(...) { break; }
+                                            }
+                                            if(tail.empty()){
+                                                // fallback to whole src
+                                                for(auto &it: src) tail.push_back(it);
+                                            }
+                                            // tail currently in reverse chronological order; reverse to ascending
+                                            std::reverse(tail.begin(), tail.end());
+
+                                            // If we need more raw bars to attempt to satisfy limit for coarse intervals, expand tail
+                                            int raw_needed = limit * 2;
+                                            if(interval != "1m"){
+                                                std::map<std::string,int> mapping{{"1m",60},{"30m",60*30},{"4h",60*60*4}};
+                                                auto itmap = mapping.find(interval);
+                                                if(itmap != mapping.end()){
+                                                    int bucket_s = itmap->second;
+                                                    int bars_per_bucket = bucket_s / 60;
+                                                    raw_needed = limit * bars_per_bucket + 128;
+                                                }
+                                            }
+                                            // if tail smaller than raw_needed, try to include older contiguous blocks if possible (we already scanned contiguous only), so otherwise we use what we have
+
+                                            std::vector<json> raw_vec;
+                                            for(auto &it: tail) raw_vec.push_back(it);
+
+                                            auto agg = indicators::aggregate_to_interval_no_fmt(raw_vec, interval);
+                                            arr = json::array();
+                                            for(auto &it: agg) arr.push_back(it);
+
+                                            // recompute indicators
+                                            json ns20 = json::array(); json ns50 = json::array(); json nv20 = json::array();
+                                            auto s20 = indicators::compute_sma(agg, 20);
+                                            auto s50 = indicators::compute_sma(agg, 50);
+                                            auto v20 = indicators::compute_vwap(agg, 20);
+                                            for(auto &x: s20) ns20.push_back(x);
+                                            for(auto &x: s50) ns50.push_back(x);
+                                            for(auto &x: v20) nv20.push_back(x);
+                                            j["indicators"] = json::object({{"sma20", ns20}, {"sma50", ns50}, {"vwap20", nv20}});
+
+                                            // Cache the response
+                                            json out = json::object({{"symbol", symbol}, {"klines", arr}, {"indicators", j["indicators"]}, {"source", "data.latest.contiguous_tail"}, {"available", (int)arr.size()}});
+                                            AggCacheEntry ent; ent.payload = out; ent.ts = std::chrono::steady_clock::now();
+                                            {
+                                                std::lock_guard<std::mutex> g(agg_cache_mutex);
+                                                agg_cache[cache_key] = ent;
+                                            }
+                                            respond_text(out.dump(), "application/json", http::status::ok);
+                                            s.shutdown(tcp::socket::shutdown_send);
+                                            return;
+                                        }
+                                    } catch(...) {
+                                        // fall through, keep arr as-is
+                                    }
+                                }
+                            }
                             if((int)arr.size() > limit) {
                                 json tmp = json::array();
                                 int start = (int)arr.size() - limit;
@@ -303,9 +627,9 @@ void WebConsoleServer::run() {
                                 arr = std::move(tmp);
                             }
                             json indicators = j.value("indicators", json::object());
-                            json out = json::object({{"klines", arr}, {"indicators", indicators}});
+                            json out = json::object({{"symbol", symbol}, {"klines", arr}, {"indicators", indicators}, {"source", std::string("data.latest")}, {"available", (int)arr.size()}});
                             respond_text(out.dump(), "application/json", http::status::ok);
-                            Logger::info(std::string("HTTP /klines response for ")+symbol+" size="+std::to_string(out.dump().size()));
+                            Logger::info(std::string("HTTP /klines response for ")+symbol+" size="+std::to_string(out.dump().size())+" source=data.latest available="+std::to_string((int)arr.size()));
                         } catch(...) {
                             respond_text("{}", "application/json", http::status::internal_server_error);
                         }
