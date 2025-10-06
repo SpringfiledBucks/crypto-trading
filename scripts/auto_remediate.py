@@ -49,10 +49,21 @@ def main():
     p.add_argument('--report', default='logs/klines_regression_report_cpp.json')
     p.add_argument('--threshold', type=int, default=500)
     p.add_argument('--out', default='logs/auto_remediation.json')
+    p.add_argument('--symbols', nargs='*', help='Optional list of symbols to remediate; if omitted, read from config/symbols.json')
     args = p.parse_args()
     if not os.path.exists(args.report):
         print('report not found:', args.report); return
     syms = find_affected(args.report, args.threshold)
+    # if user provided symbols, intersect with affected
+    if args.symbols:
+        syms = [s for s in syms if s in args.symbols]
+    else:
+        # filter by config/symbols.json if present
+        cfg = os.path.join('config','symbols.json')
+        if os.path.exists(cfg):
+            cj = json.load(open(cfg))
+            cfg_syms = set(cj.get('symbols', []))
+            syms = [s for s in syms if s in cfg_syms]
     print('affected:', syms)
     out = remediate(syms)
     with open(args.out,'w') as f: json.dump(out,f,indent=2)

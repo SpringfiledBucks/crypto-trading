@@ -54,12 +54,26 @@ int main(int argc, char **argv){
         else if(a=="--compare") { do_compare = true; }
     }
     if(syms.empty()){
-        for(auto &p: fs::directory_iterator("data/latest")){
-            if(!p.is_regular_file()) continue;
-            auto name = p.path().filename().string();
-            if(name.size()>5 && name.substr(name.size()-5) == ".json"){
-                if(name.size()>12 && name.substr(name.size()-12) == ".latest.json") continue;
-                syms.push_back(name.substr(0, name.size()-5));
+        // try config/symbols.json first
+        fs::path cfg = fs::path("config") / "symbols.json";
+        if(fs::exists(cfg)){
+            try{
+                std::ifstream ifs(cfg);
+                json cj = json::parse(ifs);
+                if(cj.contains("symbols") && cj["symbols"].is_array()){
+                    for(auto &x: cj["symbols"]) syms.push_back(x.get<std::string>());
+                }
+            } catch(...){}
+        }
+        // fallback to data/latest directory
+        if(syms.empty()){
+            for(auto &p: fs::directory_iterator("data/latest")){
+                if(!p.is_regular_file()) continue;
+                auto name = p.path().filename().string();
+                if(name.size()>5 && name.substr(name.size()-5) == ".json"){
+                    if(name.size()>12 && name.substr(name.size()-12) == ".latest.json") continue;
+                    syms.push_back(name.substr(0, name.size()-5));
+                }
             }
         }
     }
