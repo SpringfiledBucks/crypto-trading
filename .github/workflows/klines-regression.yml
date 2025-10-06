@@ -1,0 +1,29 @@
+name: klines-regression
+
+on:
+  push:
+    branches: [ feature/klines-regression, main ]
+  schedule:
+    - cron: '0 3 * * *' # daily at 03:00 UTC
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        run: |
+          sudo apt-get update && sudo apt-get install -y libboost-all-dev
+      - name: Build
+        run: |
+          cmake -S . -B build
+          cmake --build build -j 2 --target klines_regression
+      - name: Run regression
+        run: |
+          mkdir -p logs
+          ./build/klines_regression --output logs/klines_regression_report_cpp.json
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: klines-regression-report
+          path: logs/klines_regression_report_cpp.json
